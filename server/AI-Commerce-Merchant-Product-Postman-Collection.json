@@ -1,0 +1,698 @@
+{
+  "info": {
+    "_postman_id": "8b7e5f2a-9d7a-4c6b-9a5f-ai-commerce-001",
+    "name": "AI Commerce - Full API Test Collection",
+    "description": "Complete test suite for Merchant, Product, Policy, Negotiation, Agreement, Approval, and Audit Trail APIs.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:5000"
+    },
+    {
+      "key": "merchantId",
+      "value": ""
+    },
+    {
+      "key": "productId",
+      "value": ""
+    },
+    {
+      "key": "policyId",
+      "value": ""
+    },
+    {
+      "key": "negotiationId",
+      "value": ""
+    },
+    {
+      "key": "agreementId",
+      "value": ""
+    },
+    {
+      "key": "approvalId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/health"
+      }
+    },
+    {
+      "name": "Merchants",
+      "item": [
+        {
+          "name": "01 - Create Merchant",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/merchants",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Demo Merchant\",\n  \"businessName\": \"Demo Office Supplies\",\n  \"email\": \"demo{{$timestamp}}@example.com\",\n  \"phone\": \"+919876543210\",\n  \"description\": \"Demo merchant for API testing\",\n  \"currency\": \"INR\",\n  \"agentEnabled\": true,\n  \"agentDescription\": \"AI commerce agent for office supplies\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 201',()=>pm.response.to.have.status(201));",
+                  "const j=pm.response.json();",
+                  "const id=j.data?._id||j.data?.id;",
+                  "if(id) pm.collectionVariables.set('merchantId',id);",
+                  "pm.test('Merchant ID returned',()=>pm.expect(id).to.exist);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "02 - Get All Merchants",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/merchants"
+          }
+        },
+        {
+          "name": "03 - Get Merchant By ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/merchants/{{merchantId}}"
+          }
+        },
+        {
+          "name": "04 - Update Merchant",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/merchants/{{merchantId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"Updated merchant description\",\n  \"agentEnabled\": true,\n  \"agentDescription\": \"Updated AI commerce agent description\"\n}"
+            }
+          }
+        },
+        {
+          "name": "05 - Delete Merchant",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/api/merchants/{{merchantId}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Policies",
+      "item": [
+        {
+          "name": "01 - Create Policy",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/policies",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchantId\": \"{{merchantId}}\",\n  \"name\": \"Default Commerce Policy\",\n  \"description\": \"Rules for AI commerce negotiations\",\n  \"isActive\": true,\n  \"negotiationEnabled\": true,\n  \"maxDiscountPercent\": 10,\n  \"minMarginPercent\": 20,\n  \"maxQuantityPerOrder\": 50,\n  \"minOrderValue\": 0,\n  \"maxOrderValue\": 100000,\n  \"autoApprovalEnabled\": true,\n  \"autoApprovalLimit\": 50000,\n  \"freeShippingThreshold\": 5000,\n  \"maxNegotiationRounds\": 3,\n  \"allowedCurrencies\": [\n    \"INR\"\n  ]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 201',()=>pm.response.to.have.status(201));",
+                  "const j=pm.response.json();",
+                  "const id=j.data?._id||j.data?.id;",
+                  "if(id) pm.collectionVariables.set('policyId',id);",
+                  "pm.test('Policy ID returned',()=>pm.expect(id).to.exist);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "02 - Get All Policies",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/policies"
+          }
+        },
+        {
+          "name": "03 - Get Policy By Merchant ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/policies/merchant/{{merchantId}}"
+          }
+        },
+        {
+          "name": "04 - Get Policy By ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/policies/{{policyId}}"
+          }
+        },
+        {
+          "name": "05 - Update Policy",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/policies/{{policyId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"maxDiscountPercent\": 10,\n  \"minMarginPercent\": 20,\n  \"maxQuantityPerOrder\": 50,\n  \"autoApprovalLimit\": 50000\n}"
+            }
+          }
+        },
+        {
+          "name": "06 - Delete Policy",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/api/policies/{{policyId}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Products",
+      "item": [
+        {
+          "name": "01 - Create Product",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/products",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchantId\": \"{{merchantId}}\",\n  \"name\": \"Office Chair Pro\",\n  \"description\": \"Ergonomic office chair with adjustable height\",\n  \"category\": \"Office Furniture\",\n  \"sku\": \"CHAIR-PRO-{{$timestamp}}\",\n  \"price\": 10000,\n  \"costPrice\": 7000,\n  \"currency\": \"INR\",\n  \"inventory\": 100,\n  \"lowStockThreshold\": 10,\n  \"deliveryDays\": 5,\n  \"tags\": [\n    \"office\",\n    \"chair\",\n    \"ergonomic\"\n  ],\n  \"imageUrl\": \"https://example.com/chair.jpg\",\n  \"isNegotiable\": true\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 201',()=>pm.response.to.have.status(201));",
+                  "const j=pm.response.json();",
+                  "const id=j.data?._id||j.data?.id;",
+                  "if(id) pm.collectionVariables.set('productId',id);",
+                  "pm.test('Product ID returned',()=>pm.expect(id).to.exist);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "02 - Get All Products",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/products"
+          }
+        },
+        {
+          "name": "03 - Get Products By Merchant",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/products?merchantId={{merchantId}}"
+          }
+        },
+        {
+          "name": "04 - Filter By Category",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/products?category=Office%20Furniture"
+          }
+        },
+        {
+          "name": "05 - Filter Active",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/products?status=active"
+          }
+        },
+        {
+          "name": "06 - Search Products",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/products?search=chair"
+          }
+        },
+        {
+          "name": "07 - Pagination",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/products?page=1&limit=10"
+          }
+        },
+        {
+          "name": "08 - Get Product By ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/products/{{productId}}"
+          }
+        },
+        {
+          "name": "09 - Update Product",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/products/{{productId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"price\": 10000,\n  \"inventory\": 90,\n  \"description\": \"Updated ergonomic office chair with lumbar support\"\n}"
+            }
+          }
+        },
+        {
+          "name": "10 - Delete Product",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/api/products/{{productId}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Negotiations",
+      "item": [
+        {
+          "name": "01 - Start Negotiation",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/negotiations",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchantId\": \"{{merchantId}}\",\n  \"productId\": \"{{productId}}\",\n  \"policyId\": \"{{policyId}}\",\n  \"quantity\": 10,\n  \"currency\": \"INR\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 201',()=>pm.response.to.have.status(201));",
+                  "const j=pm.response.json();",
+                  "const id=j.data?._id||j.data?.id;",
+                  "if(id) pm.collectionVariables.set('negotiationId',id);",
+                  "pm.test('Negotiation ID returned',()=>pm.expect(id).to.exist);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "02 - Get Negotiation By ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/negotiations/{{negotiationId}}"
+          }
+        },
+        {
+          "name": "03 - Submit Offer (Round 1 - ₹8,000 -> Counter ₹9,000)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/negotiations/{{negotiationId}}/offers",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"buyerOffer\": 8000\n}"
+            }
+          }
+        },
+        {
+          "name": "04 - Submit Offer (Round 2 - ₹8,500 -> Counter ₹9,000)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/negotiations/{{negotiationId}}/offers",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"buyerOffer\": 8500\n}"
+            }
+          }
+        },
+        {
+          "name": "05 - Submit Offer (Round 3 - ₹9,000 -> ACCEPTED)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/negotiations/{{negotiationId}}/offers",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"buyerOffer\": 9000\n}"
+            }
+          }
+        },
+        {
+          "name": "06 - Accept Negotiation Directly",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/negotiations/{{negotiationId}}/accept",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"finalPrice\": 9000\n}"
+            }
+          }
+        },
+        {
+          "name": "07 - Reject Negotiation Directly",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/negotiations/{{negotiationId}}/reject"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Agreements",
+      "item": [
+        {
+          "name": "01 - Create Agreement From Accepted Negotiation",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/agreements/from-negotiation/{{negotiationId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 201',()=>pm.response.to.have.status(201));",
+                  "const j=pm.response.json();",
+                  "const id=j.data?._id||j.data?.id;",
+                  "if(id) pm.collectionVariables.set('agreementId',id);",
+                  "pm.test('Agreement ID returned',()=>pm.expect(id).to.exist);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "02 - Get Agreement By ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/agreements/{{agreementId}}"
+          }
+        },
+        {
+          "name": "03 - Get Agreement Explanation",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/agreements/{{agreementId}}/explanation"
+          }
+        },
+        {
+          "name": "04 - Check Payment Readiness",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/agreements/{{agreementId}}/payment-ready"
+          }
+        },
+        {
+          "name": "05 - Get Agreement Audit Trail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/agreements/{{agreementId}}/audit"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Approvals",
+      "item": [
+        {
+          "name": "01 - Get Approval By Agreement ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/approvals/agreement/{{agreementId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200',()=>pm.response.to.have.status(200));",
+                  "const j=pm.response.json();",
+                  "const id=j.data?._id||j.data?.id;",
+                  "if(id) pm.collectionVariables.set('approvalId',id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "02 - Get Approval By ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/approvals/{{approvalId}}"
+          }
+        },
+        {
+          "name": "03 - Approve Pending Agreement",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/approvals/{{approvalId}}/approve",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reviewer\": \"merchant-admin\"\n}"
+            }
+          }
+        },
+        {
+          "name": "04 - Reject Pending Agreement",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/approvals/{{approvalId}}/reject",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reviewer\": \"merchant-admin\",\n  \"reason\": \"Order value exceeds current batch production limit.\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Audit Events",
+      "item": [
+        {
+          "name": "01 - Get Audit Events By Agreement ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/audit-events/agreement/{{agreementId}}"
+          }
+        },
+        {
+          "name": "02 - Get Audit Events By Negotiation ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/audit-events/negotiation/{{negotiationId}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Validation & Error Tests",
+      "item": [
+        {
+          "name": "01 - Nonexistent Merchant",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/products",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchantId\": \"507f1f77bcf86cd799439011\",\n  \"name\": \"Invalid Test Product\",\n  \"description\": \"Should fail because merchant does not exist\",\n  \"category\": \"Test\",\n  \"sku\": \"INVALID-MERCHANT-{{$timestamp}}\",\n  \"price\": 1000,\n  \"costPrice\": 700,\n  \"currency\": \"INR\",\n  \"inventory\": 10,\n  \"lowStockThreshold\": 2,\n  \"deliveryDays\": 3,\n  \"isNegotiable\": true\n}"
+            }
+          }
+        },
+        {
+          "name": "02 - Invalid Product Price",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/products",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchantId\": \"{{merchantId}}\",\n  \"name\": \"Invalid Price Product\",\n  \"description\": \"Should fail validation\",\n  \"category\": \"Test\",\n  \"sku\": \"INVALID-PRICE-{{$timestamp}}\",\n  \"price\": -100,\n  \"costPrice\": 700,\n  \"currency\": \"INR\",\n  \"inventory\": 10,\n  \"lowStockThreshold\": 2,\n  \"deliveryDays\": 3,\n  \"isNegotiable\": true\n}"
+            }
+          }
+        },
+        {
+          "name": "03 - Duplicate SKU",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/products",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchantId\": \"{{merchantId}}\",\n  \"name\": \"Duplicate SKU Test\",\n  \"description\": \"Should fail if this SKU already exists\",\n  \"category\": \"Office Furniture\",\n  \"sku\": \"CHAIR-PRO-{{$timestamp}}\",\n  \"price\": 10000,\n  \"costPrice\": 7000,\n  \"currency\": \"INR\",\n  \"inventory\": 10,\n  \"lowStockThreshold\": 2,\n  \"deliveryDays\": 3,\n  \"isNegotiable\": true\n}"
+            }
+          }
+        },
+        {
+          "name": "04 - Merchant Not Found",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/merchants/507f1f77bcf86cd799439011"
+          }
+        },
+        {
+          "name": "05 - Product Not Found",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/products/507f1f77bcf86cd799439011"
+          }
+        },
+        {
+          "name": "06 - Create Agreement From Non-Accepted Negotiation",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/agreements/from-negotiation/507f1f77bcf86cd799439011"
+          }
+        },
+        {
+          "name": "07 - Approve Agreement Policy Violation Test",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/approvals/{{approvalId}}/approve",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reviewer\": \"merchant-admin\"\n}"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
