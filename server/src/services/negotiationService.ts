@@ -259,21 +259,26 @@ export const submitBuyerOffer = async (
   });
   negotiation.currentBuyerOffer = buyerOffer;
 
-  // OUTCOME 1: ACCEPT
+  // OUTCOME 1: VALID OFFER (Merchant accepts price as valid offer, status remains ACTIVE)
   if (
     buyerOffer >= economicResult.minimumAllowedUnitPrice &&
     (policyResult.allowed || policyResult.approvalRequired)
   ) {
-    negotiation.status = "ACCEPTED";
-    negotiation.acceptedPrice = buyerOffer;
-    negotiation.finalOrderValue = roundMoney(buyerOffer * negotiation.quantity);
+    negotiation.status = "ACTIVE";
+    negotiation.currentMerchantOffer = buyerOffer;
     negotiation.currentDiscountPercent = roundPercent(
       ((product.price - buyerOffer) / product.price) * 100
     );
     negotiation.currentMarginPercent = roundPercent(
       ((buyerOffer - product.costPrice) / buyerOffer) * 100
     );
-    negotiation.completedAt = new Date();
+
+    negotiation.history.push({
+      round: negotiation.currentRound,
+      actor: "MERCHANT",
+      offer: buyerOffer,
+      timestamp: new Date(),
+    });
 
     negotiation.markModified("history");
     await negotiation.save();
@@ -281,19 +286,20 @@ export const submitBuyerOffer = async (
     return {
       negotiationId: negotiation._id.toString(),
       decision: "ACCEPT",
-      status: "ACCEPTED",
+      status: "ACTIVE",
       round: negotiation.currentRound,
       maxRounds: negotiation.maxRounds,
       remainingRounds: Math.max(0, negotiation.maxRounds - negotiation.currentRound),
       buyerOffer,
-      acceptedPrice: buyerOffer,
-      finalOrderValue: negotiation.finalOrderValue,
+      merchantCounterOffer: buyerOffer,
+      acceptedPrice: undefined,
+      finalOrderValue: roundMoney(buyerOffer * negotiation.quantity),
       originalUnitPrice: product.price,
       quantity: negotiation.quantity,
-      orderValue: negotiation.finalOrderValue,
+      orderValue: roundMoney(buyerOffer * negotiation.quantity),
       discountPercent: negotiation.currentDiscountPercent,
       marginPercent: negotiation.currentMarginPercent,
-      reason: "Buyer offer is accepted as it satisfies merchant policy and margin requirements.",
+      reason: "Buyer offer is valid as it satisfies merchant policy and margin requirements.",
     };
   }
 
@@ -493,4 +499,55 @@ export const getNegotiationById = async (
   }
 
   return negotiation;
+};
+
+export interface GetNegotiationsQuery {
+  merchantId?: string;
+  status?: string;
+  search?: string;
+  page?: string | number;
+  limit?: string | number;
+}
+
+export const getAllNegotiations = async (query: GetNegotiationsQuery = {}) => {
+  const filter: any = {};
+
+  if (query.merchantId) {
+    if (!mongoose.Types.ObjectId.isValid(query.merchantId)) {
+      throw new AppCustomError("INVALID_MERCHANT", "Invalid merchant ID format", 400);
+    }
+    filter.merchantId = query.merchantId;
+  }
+
+  if (query.status) {
+    filter.status = query.status.toUpperCase();
+  }
+
+  const page = Math.max(1, parseInt(String(query.page || "1"), 10) || 1);
+  const limit = Math.min(
+    100,
+    Math.max(1, parseInt(String(query.limit || "20"), 10) || 20)
+  );
+  const skip = (page - 1) * limit;
+
+  const total = await Negotiation.countDocuments(filter);
+  const totalPages = Math.ceil(total / limit) || 1;
+
+  const data = await Negotiation.find(filter)
+    .populate("merchantId", "name businessName email")
+    .populate("productId", "name sku price category imageUrl deliveryDays")
+    .populate("policyId", "name maxDiscountPercent minMarginPercent freeShippingThreshold autoApprovalLimit")
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit);
+
+  return {
+    data,
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages,
+    },
+  };
 };

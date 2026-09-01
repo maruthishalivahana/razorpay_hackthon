@@ -7,6 +7,7 @@ import {
 import {
   startNegotiation,
   getNegotiationById,
+  getAllNegotiations,
   submitBuyerOffer,
   acceptNegotiation,
   rejectNegotiation,
@@ -24,6 +25,31 @@ router.post(
       return res.status(201).json({
         success: true,
         data: negotiation,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// GET /api/negotiations - List negotiations with filters and pagination
+router.get(
+  "/",
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { merchantId, status, search, page, limit } = req.query;
+      const result = await getAllNegotiations({
+        merchantId: merchantId ? String(merchantId) : undefined,
+        status: status ? String(status) : undefined,
+        search: search ? String(search) : undefined,
+        page: page ? String(page) : undefined,
+        limit: limit ? String(limit) : undefined,
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: result.data,
+        pagination: result.pagination,
       });
     } catch (error) {
       next(error);

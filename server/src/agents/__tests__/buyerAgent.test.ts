@@ -154,17 +154,21 @@ describe("Buyer Agent & Tools Unit Tests", () => {
     );
   });
 
-  test("TEST 10: Gemini missing API key handling in Buyer Agent", async () => {
-    const originalKey = process.env.GEMINI_API_KEY;
+  test("TEST 10: Missing LLM API key handling in Buyer Agent falls back gracefully", async () => {
+    const originalGemini = process.env.GEMINI_API_KEY;
+    const originalOpenRouter = process.env.OPENROUTER_API_KEY;
     delete process.env.GEMINI_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
 
     try {
-      await assert.rejects(
-        async () => runBuyerAgent("Find laptops under 50k"),
-        (err: any) => err instanceof AppCustomError && err.code === "BUYER_AGENT_UNAVAILABLE"
-      );
+      const res = await runBuyerAgent("Find laptops under 50k");
+      assert.ok(res.conversationId);
+      assert.equal(res.searchState.topic, "laptop");
+      assert.equal(res.searchState.maxPrice, 50000);
+      assert.ok(res.message.length > 0);
     } finally {
-      if (originalKey) process.env.GEMINI_API_KEY = originalKey;
+      if (originalGemini) process.env.GEMINI_API_KEY = originalGemini;
+      if (originalOpenRouter) process.env.OPENROUTER_API_KEY = originalOpenRouter;
     }
   });
 });

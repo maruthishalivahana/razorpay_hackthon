@@ -198,9 +198,11 @@ describe("Negotiation Engine Service Tests", () => {
     const res = await submitBuyerOffer(neg._id.toString(), 9200);
 
     assert.equal(res.decision, "ACCEPT");
-    assert.equal(res.status, "ACCEPTED");
-    assert.equal(res.acceptedPrice, 9200);
-    assert.equal(res.finalOrderValue, 46000);
+    assert.equal(res.status, "ACTIVE");
+    const accepted = await acceptNegotiation(neg._id.toString());
+    assert.equal(accepted.status, "ACCEPTED");
+    assert.equal(accepted.acceptedPrice, 9200);
+    assert.equal(accepted.finalOrderValue, 46000);
   });
 
   test("TEST 9: Buyer offer rejected and counter-offer generated", async () => {
@@ -327,6 +329,7 @@ describe("Negotiation Engine Service Tests", () => {
     });
 
     await submitBuyerOffer(neg._id.toString(), 9500); // Accepted
+    await acceptNegotiation(neg._id.toString());
 
     await assert.rejects(
       async () => submitBuyerOffer(neg._id.toString(), 9000),
@@ -450,9 +453,12 @@ describe("Negotiation Engine Service Tests", () => {
     // Round 3: Buyer offers ₹9,000 (Matches merchant counter-offer)
     const step3 = await submitBuyerOffer(neg._id.toString(), 9000);
     assert.equal(step3.decision, "ACCEPT");
-    assert.equal(step3.status, "ACCEPTED");
-    assert.equal(step3.acceptedPrice, 9000);
-    assert.equal(step3.finalOrderValue, 90000);
+    assert.equal(step3.status, "ACTIVE");
+
+    const accepted = await acceptNegotiation(neg._id.toString());
+    assert.equal(accepted.status, "ACCEPTED");
+    assert.equal(accepted.acceptedPrice, 9000);
+    assert.equal(accepted.finalOrderValue, 90000);
 
     // Check saved state in DB
     const finalDoc = await getNegotiationById(neg._id.toString());

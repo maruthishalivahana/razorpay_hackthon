@@ -101,7 +101,8 @@ describe("Agreement, Approval & Audit Trail Service Tests", () => {
       currency: "INR",
     });
 
-    await submitBuyerOffer(neg._id.toString(), 9000); // Accepted
+    await submitBuyerOffer(neg._id.toString(), 9000);
+    await acceptNeg(neg._id.toString());
 
     const agreement = await createAgreementFromNegotiation(neg._id.toString());
 
@@ -152,7 +153,8 @@ describe("Agreement, Approval & Audit Trail Service Tests", () => {
       currency: "INR",
     });
 
-    await submitBuyerOffer(neg._id.toString(), 9000); // Accepted at 9000
+    await submitBuyerOffer(neg._id.toString(), 9000);
+    await acceptNeg(neg._id.toString());
 
     // Now modify policy to be stricter (maxDiscountPercent = 5%)
     policy.maxDiscountPercent = 5;
@@ -174,6 +176,7 @@ describe("Agreement, Approval & Audit Trail Service Tests", () => {
     });
 
     await submitBuyerOffer(neg._id.toString(), 9000);
+    await acceptNeg(neg._id.toString());
     const agr = await createAgreementFromNegotiation(neg._id.toString());
 
     assert.equal(agr.status, "APPROVED");
@@ -190,6 +193,7 @@ describe("Agreement, Approval & Audit Trail Service Tests", () => {
     });
 
     await submitBuyerOffer(neg._id.toString(), 9000);
+    await acceptNeg(neg._id.toString());
     const agr = await createAgreementFromNegotiation(neg._id.toString());
 
     assert.equal(agr.status, "PENDING_APPROVAL");
@@ -209,6 +213,7 @@ describe("Agreement, Approval & Audit Trail Service Tests", () => {
     });
 
     await submitBuyerOffer(neg._id.toString(), 9000);
+    await acceptNeg(neg._id.toString());
     const agr = await createAgreementFromNegotiation(neg._id.toString());
 
     const result = await approveAgreement(agr._id.toString(), "merchant-admin");
@@ -231,6 +236,7 @@ describe("Agreement, Approval & Audit Trail Service Tests", () => {
     });
 
     await submitBuyerOffer(neg._id.toString(), 9000);
+    await acceptNeg(neg._id.toString());
     const agr = await createAgreementFromNegotiation(neg._id.toString());
 
     const result = await rejectAgreement(
@@ -257,6 +263,7 @@ describe("Agreement, Approval & Audit Trail Service Tests", () => {
     });
 
     await submitBuyerOffer(neg._id.toString(), 9000);
+    await acceptNeg(neg._id.toString());
     const agr = await createAgreementFromNegotiation(neg._id.toString());
 
     await assert.rejects(
@@ -275,6 +282,7 @@ describe("Agreement, Approval & Audit Trail Service Tests", () => {
     });
 
     await submitBuyerOffer(neg._id.toString(), 9000);
+    await acceptNeg(neg._id.toString());
     const agr = await createAgreementFromNegotiation(neg._id.toString());
 
     await rejectAgreement(agr._id.toString(), "merchant-admin", "Initial rejection");
@@ -295,6 +303,7 @@ describe("Agreement, Approval & Audit Trail Service Tests", () => {
     });
 
     await submitBuyerOffer(neg._id.toString(), 9000);
+    await acceptNeg(neg._id.toString());
     const agr = await createAgreementFromNegotiation(neg._id.toString()); // Pending approval
 
     // Merchant changes policy max discount to 5% before approving!
@@ -317,6 +326,7 @@ describe("Agreement, Approval & Audit Trail Service Tests", () => {
     });
 
     await submitBuyerOffer(neg._id.toString(), 9000);
+    await acceptNeg(neg._id.toString());
     const agr = await createAgreementFromNegotiation(neg._id.toString());
 
     // Pending approval -> payment ready throws AGREEMENT_NOT_APPROVED
@@ -341,6 +351,7 @@ describe("Agreement, Approval & Audit Trail Service Tests", () => {
     });
 
     await submitBuyerOffer(neg._id.toString(), 9000);
+    await acceptNeg(neg._id.toString());
     const agr = await createAgreementFromNegotiation(neg._id.toString());
     await approveAgreement(agr._id.toString(), "merchant-admin");
 
@@ -387,6 +398,7 @@ describe("Agreement, Approval & Audit Trail Service Tests", () => {
     // Step 5: Round 3 - Buyer accepts ₹9,000
     const step3 = await submitBuyerOffer(neg._id.toString(), 9000);
     assert.equal(step3.decision, "ACCEPT");
+    await acceptNeg(neg._id.toString());
 
     // Step 6 & 7: Create Agreement
     const agreement = await createAgreementFromNegotiation(neg._id.toString());
@@ -424,6 +436,7 @@ describe("Agreement, Approval & Audit Trail Service Tests", () => {
     });
 
     await submitBuyerOffer(neg._id.toString(), 9000);
+    await acceptNeg(neg._id.toString());
     const agreement = await createAgreementFromNegotiation(neg._id.toString());
 
     // Policy change before approval: max discount reduced to 5%

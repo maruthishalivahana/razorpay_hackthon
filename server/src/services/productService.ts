@@ -32,6 +32,9 @@ export interface ProductSearchParams {
   quantity?: number;
   merchantId?: string;
   requirements?: Record<string, any>;
+  hardRequirements?: Record<string, any>;
+  preferences?: Record<string, any>;
+  softPreferences?: Record<string, any>;
   limit?: number;
   sortBy?: "relevance" | "price_asc" | "price_desc";
 }
@@ -65,6 +68,8 @@ export interface ProductSearchResult {
     quantity?: number;
     merchantId?: string;
     requirements?: Record<string, any>;
+    hardRequirements?: Record<string, any>;
+    softPreferences?: Record<string, any>;
     limit: number;
     sortBy: "relevance" | "price_asc" | "price_desc";
   };
@@ -75,9 +80,16 @@ const escapeRegex = (str: string): string => {
 };
 
 export const toPublicProduct = (product: IProduct): PublicProduct => {
+  let mId = "";
+  if (product.merchantId) {
+    mId = typeof product.merchantId === "object" && (product.merchantId as any)._id
+      ? (product.merchantId as any)._id.toString()
+      : product.merchantId.toString();
+  }
+
   return {
     id: product._id.toString(),
-    merchantId: product.merchantId ? product.merchantId.toString() : "",
+    merchantId: mId,
     name: product.name,
     description: product.description,
     category: product.category,
@@ -90,6 +102,116 @@ export const toPublicProduct = (product: IProduct): PublicProduct => {
     imageUrl: product.imageUrl,
     isNegotiable: product.isNegotiable,
   };
+};
+
+export const SUPPORTED_HARD_REQUIREMENT_KEYS = new Set([
+  "ergonomic",
+  "ergonomics",
+  "adjustableheight",
+  "adjustable_height",
+  "heightadjustable",
+  "height_adjustable",
+  "lumbarsupport",
+  "lumbar_support",
+  "ram",
+  "storage",
+  "ssd",
+  "hdd",
+  "processor",
+  "cpu",
+  "screensize",
+  "screen_size",
+  "brand",
+  "material",
+  "mesh",
+  "leather",
+  "color",
+  "colour",
+  "size",
+  "wireless",
+  "bluetooth",
+  "gaming",
+  "foldable",
+  "folding",
+  "wheels",
+  "armrest",
+  "armrests",
+  "reclining",
+  "recliner",
+  "warranty",
+  "deliverydays",
+  "isnegotiable",
+]);
+
+export interface CatalogCapabilities {
+  supportedHardKeys: Set<string>;
+  searchableFields: string[];
+}
+
+export const getCatalogCapabilities = (): CatalogCapabilities => {
+  return {
+    supportedHardKeys: SUPPORTED_HARD_REQUIREMENT_KEYS,
+    searchableFields: ["name", "description", "category", "tags"],
+  };
+};
+
+export const validateCatalogRequirements = (
+  rawHard: Record<string, any> = {},
+  rawSoft: Record<string, any> = {},
+  capabilities: CatalogCapabilities = getCatalogCapabilities()
+): {
+  hardRequirements: Record<string, string | number | boolean>;
+  softPreferences: Record<string, string | number | boolean>;
+  unsupported: Record<string, string | number | boolean>;
+} => {
+  const hardRequirements: Record<string, string | number | boolean> = {};
+  const softPreferences: Record<string, string | number | boolean> = {};
+  const unsupported: Record<string, string | number | boolean> = {};
+
+  for (const [key, value] of Object.entries(rawHard)) {
+    if (value === undefined || value === null) continue;
+    const normalizedKey = key.replace(/[\s_-]+/g, "").toLowerCase();
+    if (capabilities.supportedHardKeys.has(normalizedKey)) {
+      hardRequirements[key] = value;
+    } else {
+      softPreferences[key] = value;
+      unsupported[key] = value;
+    }
+  }
+
+  for (const [key, value] of Object.entries(rawSoft)) {
+    if (value === undefined || value === null) continue;
+    softPreferences[key] = value;
+    const normalizedKey = key.replace(/[\s_-]+/g, "").toLowerCase();
+    if (!capabilities.supportedHardKeys.has(normalizedKey)) {
+      unsupported[key] = value;
+    }
+  }
+
+  return { hardRequirements, softPreferences, unsupported };
+};
+
+export const classifyRequirements = (
+  requirements?: Record<string, any>
+): { supported: Record<string, any>; unsupported: Record<string, any> } => {
+  const supported: Record<string, any> = {};
+  const unsupported: Record<string, any> = {};
+
+  if (!requirements || typeof requirements !== "object") {
+    return { supported, unsupported };
+  }
+
+  for (const [key, value] of Object.entries(requirements)) {
+    if (value === undefined || value === null) continue;
+    const normalizedKey = key.replace(/[\s_-]+/g, "").toLowerCase();
+    if (SUPPORTED_HARD_REQUIREMENT_KEYS.has(normalizedKey)) {
+      supported[key] = value;
+    } else {
+      unsupported[key] = value;
+    }
+  }
+
+  return { supported, unsupported };
 };
 
 export const searchProducts = async (
@@ -180,32 +302,57 @@ export const searchProducts = async (
   const requiredInventory = quantity ?? minInventory ?? 1;
   filter.inventory = { $gte: requiredInventory };
 
+  const tokenize = (str: string): string[] => {
+    return str.trim().toLowerCase().split(/\s+/).filter(Boolean).map(t => {
+      if (/(?:ss|is|us|as|os|yes|this|glass|dress|business|less|mass|boss|cross|furniture)$/i.test(t)) return t;
+      if (t.length > 3 && t.endsWith("s")) return t.slice(0, -1);
+      return t;
+    });
+  };
+
   if (query && query.trim().length > 0) {
-    const qRegex = new RegExp(escapeRegex(query.trim()), "i");
-    filter.$or = [
-      { name: qRegex },
-      { description: qRegex },
-      { category: qRegex },
-      { tags: qRegex },
-    ];
+    const tokens = tokenize(query);
+    if (tokens.length > 0) {
+      filter.$and = tokens.map(token => {
+        const tRegex = new RegExp(escapeRegex(token), "i");
+        return {
+          $or: [
+            { name: tRegex },
+            { description: tRegex },
+            { category: tRegex },
+            { tags: tRegex },
+          ]
+        };
+      });
+    }
   }
 
   // Fetch candidates from MongoDB
+  console.log("Searching MongoDB with filter:", JSON.stringify(filter));
   let rawProducts = await Product.find(filter);
+  console.log("MongoDB returned items:", rawProducts.length);
 
-  // Requirements filtering (e.g. RAM, storage matching against name/description/tags)
-  if (requirements && typeof requirements === "object") {
-    const reqEntries = Object.entries(requirements);
-    if (reqEntries.length > 0) {
-      rawProducts = rawProducts.filter((p) => {
-        const fullText = `${p.name} ${p.description} ${(p.tags || []).join(" ")}`.toLowerCase();
-        return reqEntries.every(([key, value]) => {
-          if (!value) return true;
+  // Requirements classification via Catalog Capabilities
+  const rawHardInput = params.hardRequirements || params.requirements || {};
+  const rawSoftInput = params.softPreferences || params.preferences || {};
+  const { hardRequirements: validatedHard, softPreferences: validatedSoft } = validateCatalogRequirements(rawHardInput, rawSoftInput);
+
+  // Requirements filtering (ONLY supported hard requirements filter rawProducts)
+  const hardEntries = Object.entries(validatedHard);
+  if (hardEntries.length > 0) {
+    rawProducts = rawProducts.filter((p) => {
+      const fullText = `${p.name} ${p.description} ${(p.tags || []).join(" ")}`.toLowerCase();
+      return hardEntries.every(([key, value]) => {
+        if (value === false) return true;
+        if (value === true || String(value).toLowerCase() === "true" || String(value).toLowerCase() === "yes") {
+          const readableKey = key.replace(/([A-Z])/g, " $1").trim().toLowerCase();
+          return fullText.includes(readableKey);
+        } else {
           const strVal = String(value).toLowerCase();
           return fullText.includes(strVal);
-        });
+        }
       });
-    }
+    });
   }
 
   const total = rawProducts.length;
@@ -217,8 +364,9 @@ export const searchProducts = async (
     rawProducts.sort((a, b) => b.price - a.price);
   } else {
     // Relevance scoring
-    const queryStr = (query || "").trim().toLowerCase();
+    const queryTokens = query ? tokenize(query) : [];
     const catStr = (category || "").trim().toLowerCase();
+    const exactQuery = (query || "").trim().toLowerCase();
 
     const scored = rawProducts.map((p) => {
       let score = 0;
@@ -226,11 +374,11 @@ export const searchProducts = async (
       const descLower = p.description.toLowerCase();
       const catLower = p.category.toLowerCase();
 
-      if (queryStr) {
-        if (nameLower === queryStr) score += 100;
-        else if (nameLower.includes(queryStr)) score += 50;
-        if (catLower.includes(queryStr)) score += 30;
-        if (descLower.includes(queryStr)) score += 10;
+      if (exactQuery) {
+        if (nameLower === exactQuery) score += 100;
+        else if (nameLower.includes(exactQuery)) score += 50;
+        if (catLower.includes(exactQuery)) score += 30;
+        if (descLower.includes(exactQuery)) score += 10;
       }
 
       if (catStr && catLower.includes(catStr)) {
@@ -239,11 +387,32 @@ export const searchProducts = async (
 
       if (p.inventory > 0) score += 5;
 
+      // Soft preference relevance boost
+      const softEntries = Object.entries(validatedSoft);
+      if (softEntries.length > 0) {
+        const fullText = `${p.name} ${p.description} ${(p.tags || []).join(" ")}`.toLowerCase();
+        for (const [sKey, sVal] of softEntries) {
+          if (sVal === false) continue;
+          const keyTerms = sKey.replace(/([A-Z])/g, " $1").trim().toLowerCase().split(/\s+/);
+          const valTerms = typeof sVal === "string" ? sVal.toLowerCase().split(/\s+/) : [];
+          const terms = [...keyTerms, ...valTerms].filter((t) => t.length > 2);
+          for (const term of terms) {
+            if (fullText.includes(term)) {
+              score += 15;
+              break;
+            }
+          }
+        }
+      }
+
       return { product: p, score };
     });
+    
+    console.log("Scores computed. Sorting...", scored.length);
 
     scored.sort((a, b) => b.score - a.score || b.product.createdAt.getTime() - a.product.createdAt.getTime());
     rawProducts = scored.map((s) => s.product);
+    console.log("Sorted");
   }
 
   const sliced = rawProducts.slice(0, limit);
@@ -261,7 +430,9 @@ export const searchProducts = async (
       minInventory,
       quantity,
       merchantId,
-      requirements,
+      requirements: validatedHard,
+      hardRequirements: validatedHard,
+      softPreferences: validatedSoft,
       limit,
       sortBy,
     },
