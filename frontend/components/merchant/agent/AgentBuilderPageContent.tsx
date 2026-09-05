@@ -225,19 +225,34 @@ export function AgentBuilderPageContent() {
       }
     }
 
-    const minOrderVal = Number(formPolicy.minOrderValue ?? (mode === "EDIT" ? serverPolicy?.minOrderValue : 0) ?? 0);
+    const minOrderVal = Number(
+      formPolicy.minOrderValue ?? (mode === "EDIT" ? serverPolicy?.minOrderValue : 0) ?? 0
+    );
+    const maxOrderVal = Number(
+      formPolicy.maxOrderValue ?? (mode === "EDIT" ? serverPolicy?.maxOrderValue : 100000) ?? 100000
+    );
     if (formPolicy.maxOrderValue !== undefined && formPolicy.maxOrderValue !== null && String(formPolicy.maxOrderValue) !== "") {
-      const maxOrder = Number(formPolicy.maxOrderValue);
-      if (isNaN(maxOrder) || maxOrder < minOrderVal) {
+      if (isNaN(maxOrderVal) || maxOrderVal < minOrderVal) {
         errors.maxOrderValue = "Max order value cannot be less than min order value";
       }
     }
 
+    const autoApprovalVal = Number(
+      formPolicy.autoApprovalLimit ?? (mode === "EDIT" ? serverPolicy?.autoApprovalLimit : 50000) ?? 50000
+    );
     if (formPolicy.autoApprovalLimit !== undefined && formPolicy.autoApprovalLimit !== null && String(formPolicy.autoApprovalLimit) !== "") {
-      const autoLimit = Number(formPolicy.autoApprovalLimit);
-      if (isNaN(autoLimit) || autoLimit < 0) {
+      if (isNaN(autoApprovalVal) || autoApprovalVal < 0) {
         errors.autoApprovalLimit = "Auto approval limit cannot be negative";
       }
+    }
+
+    if (
+      !isNaN(autoApprovalVal) &&
+      !isNaN(maxOrderVal) &&
+      autoApprovalVal > maxOrderVal
+    ) {
+      errors.autoApprovalLimit = "Auto approval limit cannot be greater than max order value";
+      errors.maxOrderValue = "Max order value must be at least the auto approval limit";
     }
 
     setFieldErrors(errors);
