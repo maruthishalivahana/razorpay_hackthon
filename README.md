@@ -1,10 +1,10 @@
-# Agentic Commerce — AI Buyer to Payment
+# AI Growth & Agentic Commerce
 
 An end-to-end agentic commerce platform where AI buyers can discover products, negotiate within merchant-defined policies, complete Razorpay payments, and trigger real inventory updates.
 
 ## 1) Project Title
 
-**Agentic Commerce — AI Buyer to Payment**
+**AI Growth & Agentic Commerce**
 
 An end-to-end agentic commerce platform where AI buyers can discover products, negotiate within merchant-defined policies, complete Razorpay payments, and trigger real inventory updates.
 
