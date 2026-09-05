@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Bot, Save, RotateCcw, AlertCircle, RefreshCw, Sparkles, CheckCircle2 } from "lucide-react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { Bot, Save, RotateCcw, AlertCircle, RefreshCw, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -11,18 +13,23 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { AgentPreview } from "./AgentPreview";
 import { AgentProductScopeSection } from "./AgentProductScopeSection";
-import { fetchMerchantPolicy, updatePolicy, createPolicy } from "@/lib/api/policies";
+import { fetchMyPolicy, updatePolicy, createPolicy } from "@/lib/api/policies";
 import { updateMerchant } from "@/lib/api/merchants";
 import { fetchProducts } from "@/lib/api/products";
 import { useMerchant } from "@/hooks/useMerchant";
 import type { Policy } from "@/types/policy";
 
+type Mode = "CREATE" | "EDIT";
+
 export function AgentBuilderPageContent() {
   const { selectedMerchant, setSelectedMerchant, loading: merchantLoading } = useMerchant();
+  const router = useRouter();
 
+  const [mode, setMode] = useState<Mode>("CREATE");
+  const [policyId, setPolicyId] = useState<string | null>(null);
   const [serverPolicy, setServerPolicy] = useState<Policy | null>(null);
   const [formPolicy, setFormPolicy] = useState<Partial<Policy>>({});
-  const [agentEnabled, setAgentEnabled] = useState<boolean>(true);
+  const [agentEnabled, setAgentEnabled] = useState<boolean>(false);
   const [agentDescription, setAgentDescription] = useState<string>("");
 
   const [productCount, setProductCount] = useState<number>(0);
@@ -34,14 +41,17 @@ export function AgentBuilderPageContent() {
 
   // Load Policy and Merchant state
   const loadPolicyAndData = useCallback(async () => {
-    if (!selectedMerchant?._id) return;
+    if (!selectedMerchant?._id) {
+      setLoading(false);
+      return;
+    }
     try {
       setLoading(true);
       setError(null);
       setFieldErrors({});
 
       // Set merchant agent state
-      setAgentEnabled(selectedMerchant.agentEnabled ?? true);
+      setAgentEnabled(selectedMerchant.agentEnabled ?? false);
       setAgentDescription(selectedMerchant.agentDescription || "");
 
       // Load products count
@@ -57,36 +67,61 @@ export function AgentBuilderPageContent() {
       }
 
       // Load policy
-      const policyRes = await fetchMerchantPolicy(selectedMerchant._id);
-      if (policyRes.success && policyRes.data) {
-        setServerPolicy(policyRes.data);
-        setFormPolicy(policyRes.data);
-      } else {
-        setServerPolicy(null);
-        setFormPolicy({});
+      try {
+        const policyRes = await fetchMyPolicy();
+        if (policyRes.success && policyRes.data) {
+          setServerPolicy(policyRes.data);
+          setPolicyId(policyRes.data._id || policyRes.data.id || null);
+          setMode("EDIT");
+          setFormPolicy(policyRes.data);
+        } else {
+          setPolicyId(null);
+          setMode("CREATE");
+          setServerPolicy(null);
+          setFormPolicy({});
+        }
+      } catch (err: unknown) {
+        const e = err as { status?: number; code?: string; message?: string };
+        const isNotFound =
+          e?.status === 404 ||
+          e?.code === "NOT_FOUND" ||
+          e?.code === "POLICY_NOT_FOUND" ||
+          e?.code === "HTTP_404" ||
+          (e?.message && String(e.message).toLowerCase().includes("not found"));
+
+        if (isNotFound) {
+          // Clean 404 / Policy does not exist -> First-run CREATE mode
+          setPolicyId(null);
+          setMode("CREATE");
+          setServerPolicy(null);
+          setFormPolicy({});
+          setError(null);
+        } else {
+          // Genuine 500 or network error
+          console.error("Genuine server error loading policy:", err);
+          setError("Unable to load agent configuration.");
+        }
       }
-    } catch (err: any) {
-      console.error("Error loading policy:", err);
-      if (err?.code === "POLICY_NOT_FOUND" || err?.status === 404) {
-        setServerPolicy(null);
-        setFormPolicy({});
-      } else {
-        setError("Unable to load agent configuration.");
-      }
+    } catch (err: unknown) {
+      console.error("Error loading policy and data:", err);
+      setError("Unable to load agent configuration.");
     } finally {
       setLoading(false);
     }
   }, [selectedMerchant]);
 
   useEffect(() => {
-    if (!merchantLoading) {
-      loadPolicyAndData();
+    if (!merchantLoading && selectedMerchant?._id) {
+      const timer = setTimeout(() => {
+        void loadPolicyAndData();
+      }, 0);
+      return () => clearTimeout(timer);
     }
-  }, [merchantLoading, loadPolicyAndData]);
+  }, [merchantLoading, selectedMerchant?._id, loadPolicyAndData]);
 
   // Dirty state detection
   const isDirty = Boolean(
-    serverPolicy === null && Object.keys(formPolicy).length > 0 ||
+    (serverPolicy === null && Object.keys(formPolicy).length > 0) ||
     (serverPolicy && (
       formPolicy.maxDiscountPercent !== serverPolicy.maxDiscountPercent ||
       formPolicy.minMarginPercent !== serverPolicy.minMarginPercent ||
@@ -101,12 +136,12 @@ export function AgentBuilderPageContent() {
       formPolicy.name !== serverPolicy.name ||
       formPolicy.isActive !== serverPolicy.isActive
     )) ||
-    agentEnabled !== (selectedMerchant?.agentEnabled ?? true) ||
+    agentEnabled !== (selectedMerchant?.agentEnabled ?? false) ||
     agentDescription !== (selectedMerchant?.agentDescription || "")
   );
 
   // Field change handler
-  const handlePolicyChange = (field: keyof Policy, value: any) => {
+  const handlePolicyChange = (field: keyof Policy, value: unknown) => {
     setFormPolicy((prev) => ({ ...prev, [field]: value }));
     setSaveSuccess(false);
     if (fieldErrors[field]) {
@@ -118,6 +153,17 @@ export function AgentBuilderPageContent() {
     }
   };
 
+  // Helper to get field value for input display
+  const getFieldValue = (field: keyof Policy, fallbackDefault?: number): string | number => {
+    if (formPolicy[field] !== undefined && formPolicy[field] !== null) {
+      return formPolicy[field] as number;
+    }
+    if (mode === "EDIT" && fallbackDefault !== undefined) {
+      return fallbackDefault;
+    }
+    return "";
+  };
+
   // Discard changes
   const handleDiscard = () => {
     if (serverPolicy) {
@@ -126,7 +172,7 @@ export function AgentBuilderPageContent() {
       setFormPolicy({});
     }
     if (selectedMerchant) {
-      setAgentEnabled(selectedMerchant.agentEnabled ?? true);
+      setAgentEnabled(selectedMerchant.agentEnabled ?? false);
       setAgentDescription(selectedMerchant.agentDescription || "");
     }
     setFieldErrors({});
@@ -137,44 +183,61 @@ export function AgentBuilderPageContent() {
   const validateForm = (): boolean => {
     const errors: Record<string, string> = {};
 
-    const maxDisc = Number(formPolicy.maxDiscountPercent ?? 10);
-    if (isNaN(maxDisc) || maxDisc < 0 || maxDisc > 100) {
-      errors.maxDiscountPercent = "Maximum discount must be between 0% and 100%";
+    if (formPolicy.maxDiscountPercent !== undefined && formPolicy.maxDiscountPercent !== null && String(formPolicy.maxDiscountPercent) !== "") {
+      const maxDisc = Number(formPolicy.maxDiscountPercent);
+      if (isNaN(maxDisc) || maxDisc < 0 || maxDisc > 100) {
+        errors.maxDiscountPercent = "Maximum discount must be between 0% and 100%";
+      }
     }
 
-    const minMargin = Number(formPolicy.minMarginPercent ?? 20);
-    if (isNaN(minMargin) || minMargin < 0 || minMargin > 100) {
-      errors.minMarginPercent = "Minimum margin must be between 0% and 100%";
+    if (formPolicy.minMarginPercent !== undefined && formPolicy.minMarginPercent !== null && String(formPolicy.minMarginPercent) !== "") {
+      const minMargin = Number(formPolicy.minMarginPercent);
+      if (isNaN(minMargin) || minMargin < 0 || minMargin > 100) {
+        errors.minMarginPercent = "Minimum margin must be between 0% and 100%";
+      }
     }
 
-    const maxRounds = Number(formPolicy.maxNegotiationRounds ?? 3);
-    if (isNaN(maxRounds) || maxRounds < 0 || maxRounds > 20) {
-      errors.maxNegotiationRounds = "Rounds must be an integer between 0 and 20";
+    if (formPolicy.maxNegotiationRounds !== undefined && formPolicy.maxNegotiationRounds !== null && String(formPolicy.maxNegotiationRounds) !== "") {
+      const maxRounds = Number(formPolicy.maxNegotiationRounds);
+      if (isNaN(maxRounds) || maxRounds < 0 || maxRounds > 20) {
+        errors.maxNegotiationRounds = "Rounds must be an integer between 0 and 20";
+      }
     }
 
-    const freeShip = Number(formPolicy.freeShippingThreshold ?? 5000);
-    if (isNaN(freeShip) || freeShip < 0) {
-      errors.freeShippingThreshold = "Free shipping threshold cannot be negative";
+    if (formPolicy.freeShippingThreshold !== undefined && formPolicy.freeShippingThreshold !== null && String(formPolicy.freeShippingThreshold) !== "") {
+      const freeShip = Number(formPolicy.freeShippingThreshold);
+      if (isNaN(freeShip) || freeShip < 0) {
+        errors.freeShippingThreshold = "Free shipping threshold cannot be negative";
+      }
     }
 
-    const maxQty = Number(formPolicy.maxQuantityPerOrder ?? 50);
-    if (isNaN(maxQty) || maxQty < 1) {
-      errors.maxQuantityPerOrder = "Max quantity must be at least 1";
+    if (formPolicy.maxQuantityPerOrder !== undefined && formPolicy.maxQuantityPerOrder !== null && String(formPolicy.maxQuantityPerOrder) !== "") {
+      const maxQty = Number(formPolicy.maxQuantityPerOrder);
+      if (isNaN(maxQty) || maxQty < 1) {
+        errors.maxQuantityPerOrder = "Max quantity must be at least 1";
+      }
     }
 
-    const minOrder = Number(formPolicy.minOrderValue ?? 0);
-    if (isNaN(minOrder) || minOrder < 0) {
-      errors.minOrderValue = "Min order value cannot be negative";
+    if (formPolicy.minOrderValue !== undefined && formPolicy.minOrderValue !== null && String(formPolicy.minOrderValue) !== "") {
+      const minOrder = Number(formPolicy.minOrderValue);
+      if (isNaN(minOrder) || minOrder < 0) {
+        errors.minOrderValue = "Min order value cannot be negative";
+      }
     }
 
-    const maxOrder = Number(formPolicy.maxOrderValue ?? 100000);
-    if (isNaN(maxOrder) || maxOrder < minOrder) {
-      errors.maxOrderValue = "Max order value cannot be less than min order value";
+    const minOrderVal = Number(formPolicy.minOrderValue ?? (mode === "EDIT" ? serverPolicy?.minOrderValue : 0) ?? 0);
+    if (formPolicy.maxOrderValue !== undefined && formPolicy.maxOrderValue !== null && String(formPolicy.maxOrderValue) !== "") {
+      const maxOrder = Number(formPolicy.maxOrderValue);
+      if (isNaN(maxOrder) || maxOrder < minOrderVal) {
+        errors.maxOrderValue = "Max order value cannot be less than min order value";
+      }
     }
 
-    const autoLimit = Number(formPolicy.autoApprovalLimit ?? 50000);
-    if (isNaN(autoLimit) || autoLimit < 0) {
-      errors.autoApprovalLimit = "Auto approval limit cannot be negative";
+    if (formPolicy.autoApprovalLimit !== undefined && formPolicy.autoApprovalLimit !== null && String(formPolicy.autoApprovalLimit) !== "") {
+      const autoLimit = Number(formPolicy.autoApprovalLimit);
+      if (isNaN(autoLimit) || autoLimit < 0) {
+        errors.autoApprovalLimit = "Auto approval limit cannot be negative";
+      }
     }
 
     setFieldErrors(errors);
@@ -205,79 +268,82 @@ export function AgentBuilderPageContent() {
       }
 
       // Save policy
-      let policyResult: Policy;
-
-      if (serverPolicy?._id || serverPolicy?.id) {
-        const policyId = (serverPolicy._id || serverPolicy.id) as string;
-        const res = await updatePolicy(policyId, {
-          name: formPolicy.name || "Default Commerce Policy",
-          description: formPolicy.description,
-          isActive: formPolicy.isActive ?? true,
-          negotiationEnabled: formPolicy.negotiationEnabled ?? true,
-          maxDiscountPercent: Number(formPolicy.maxDiscountPercent ?? 10),
-          minMarginPercent: Number(formPolicy.minMarginPercent ?? 20),
-          maxQuantityPerOrder: Number(formPolicy.maxQuantityPerOrder ?? 50),
-          minOrderValue: Number(formPolicy.minOrderValue ?? 0),
-          maxOrderValue: Number(formPolicy.maxOrderValue ?? 100000),
-          autoApprovalEnabled: formPolicy.autoApprovalEnabled ?? true,
-          autoApprovalLimit: Number(formPolicy.autoApprovalLimit ?? 50000),
-          freeShippingThreshold: Number(formPolicy.freeShippingThreshold ?? 5000),
-          maxNegotiationRounds: Number(formPolicy.maxNegotiationRounds ?? 3),
-          allowedCurrencies: formPolicy.allowedCurrencies || ["INR"],
+      if (mode === "EDIT") {
+        if (!policyId) {
+          throw new Error("Configured agent is missing its policy ID.");
+        }
+        if (!isDirty) {
+          router.replace("/merchant/agent-builder");
+          return;
+        }
+        const updateRes = await updatePolicy(policyId, {
+          name: formPolicy.name?.trim() || serverPolicy?.name || "Merchant Commerce Policy",
+          description: formPolicy.description?.trim() || serverPolicy?.description,
+          isActive: formPolicy.isActive ?? serverPolicy?.isActive ?? true,
+          negotiationEnabled: formPolicy.negotiationEnabled ?? serverPolicy?.negotiationEnabled ?? true,
+          maxDiscountPercent: Number(formPolicy.maxDiscountPercent ?? serverPolicy?.maxDiscountPercent ?? 10),
+          minMarginPercent: Number(formPolicy.minMarginPercent ?? serverPolicy?.minMarginPercent ?? 20),
+          maxQuantityPerOrder: Number(formPolicy.maxQuantityPerOrder ?? serverPolicy?.maxQuantityPerOrder ?? 50),
+          minOrderValue: Number(formPolicy.minOrderValue ?? serverPolicy?.minOrderValue ?? 0),
+          maxOrderValue: Number(formPolicy.maxOrderValue ?? serverPolicy?.maxOrderValue ?? 100000),
+          autoApprovalEnabled: formPolicy.autoApprovalEnabled ?? serverPolicy?.autoApprovalEnabled ?? true,
+          autoApprovalLimit: Number(formPolicy.autoApprovalLimit ?? serverPolicy?.autoApprovalLimit ?? 50000),
+          freeShippingThreshold: Number(formPolicy.freeShippingThreshold ?? serverPolicy?.freeShippingThreshold ?? 5000),
+          maxNegotiationRounds: Number(formPolicy.maxNegotiationRounds ?? serverPolicy?.maxNegotiationRounds ?? 3),
+          allowedCurrencies: formPolicy.allowedCurrencies || serverPolicy?.allowedCurrencies || ["INR"],
         });
-        policyResult = res.data;
+        if (updateRes.success && updateRes.data) {
+          setServerPolicy(updateRes.data);
+          setFormPolicy(updateRes.data);
+          setSaveSuccess(true);
+        }
       } else {
-        // Create policy
-        const res = await createPolicy({
-          merchantId: selectedMerchant._id,
-          name: formPolicy.name || "Default Commerce Policy",
-          description: formPolicy.description || "Rules for AI commerce negotiations",
+        // CREATE mode: MUST call POST /api/policies
+        const createRes = await createPolicy({
+          name: formPolicy.name?.trim() || "Merchant Commerce Policy",
+          description: formPolicy.description?.trim() || "Rules for AI commerce negotiations",
           isActive: formPolicy.isActive ?? true,
           negotiationEnabled: formPolicy.negotiationEnabled ?? true,
-          maxDiscountPercent: Number(formPolicy.maxDiscountPercent ?? 10),
-          minMarginPercent: Number(formPolicy.minMarginPercent ?? 20),
-          maxQuantityPerOrder: Number(formPolicy.maxQuantityPerOrder ?? 50),
-          minOrderValue: Number(formPolicy.minOrderValue ?? 0),
-          maxOrderValue: Number(formPolicy.maxOrderValue ?? 100000),
+          maxDiscountPercent: Number(formPolicy.maxDiscountPercent !== undefined ? formPolicy.maxDiscountPercent : 10),
+          minMarginPercent: Number(formPolicy.minMarginPercent !== undefined ? formPolicy.minMarginPercent : 20),
+          maxQuantityPerOrder: Number(formPolicy.maxQuantityPerOrder !== undefined ? formPolicy.maxQuantityPerOrder : 50),
+          minOrderValue: Number(formPolicy.minOrderValue !== undefined ? formPolicy.minOrderValue : 0),
+          maxOrderValue: Number(formPolicy.maxOrderValue !== undefined ? formPolicy.maxOrderValue : 100000),
           autoApprovalEnabled: formPolicy.autoApprovalEnabled ?? true,
-          autoApprovalLimit: Number(formPolicy.autoApprovalLimit ?? 50000),
-          freeShippingThreshold: Number(formPolicy.freeShippingThreshold ?? 5000),
-          maxNegotiationRounds: Number(formPolicy.maxNegotiationRounds ?? 3),
+          autoApprovalLimit: Number(formPolicy.autoApprovalLimit !== undefined ? formPolicy.autoApprovalLimit : 50000),
+          freeShippingThreshold: Number(formPolicy.freeShippingThreshold !== undefined ? formPolicy.freeShippingThreshold : 5000),
+          maxNegotiationRounds: Number(formPolicy.maxNegotiationRounds !== undefined ? formPolicy.maxNegotiationRounds : 3),
           allowedCurrencies: formPolicy.allowedCurrencies || ["INR"],
         });
-        policyResult = res.data;
+
+        // Ensure merchant agent is active
+        if (!agentEnabled || selectedMerchant.agentEnabled !== true) {
+          const merchRes = await updateMerchant(selectedMerchant._id, {
+            agentEnabled: true,
+            agentDescription: agentDescription || "Automated sales & negotiation agent",
+          });
+          if (merchRes.success && merchRes.data) {
+            setSelectedMerchant(merchRes.data);
+          }
+        }
+
+        if (createRes.success && createRes.data) {
+          setServerPolicy(createRes.data);
+          setFormPolicy(createRes.data);
+          setPolicyId(createRes.data._id || null);
+          setMode("EDIT");
+          setSaveSuccess(true);
+        }
       }
 
-      setServerPolicy(policyResult);
-      setFormPolicy(policyResult);
-      setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 4000);
-    } catch (err: any) {
+      router.replace("/merchant/agent-builder");
+    } catch (err: unknown) {
+      const e = err as { message?: string };
       console.error("Save policy failed:", err);
-      setError(err?.message || "Unable to save agent configuration.");
+      setError(e?.message || "Unable to save agent configuration.");
     } finally {
       setSaving(false);
     }
-  };
-
-  // Initialize policy if none exists
-  const handleCreateInitialPolicy = () => {
-    setFormPolicy({
-      name: "Default Commerce Policy",
-      description: "Rules for AI commerce negotiations",
-      isActive: true,
-      negotiationEnabled: true,
-      maxDiscountPercent: 10,
-      minMarginPercent: 20,
-      maxQuantityPerOrder: 50,
-      minOrderValue: 0,
-      maxOrderValue: 100000,
-      autoApprovalEnabled: true,
-      autoApprovalLimit: 50000,
-      freeShippingThreshold: 5000,
-      maxNegotiationRounds: 3,
-      allowedCurrencies: ["INR"],
-    });
   };
 
   if (loading || merchantLoading) {
@@ -290,7 +356,31 @@ export function AgentBuilderPageContent() {
     );
   }
 
-  if (error && !formPolicy.name) {
+  // Missing merchant state
+  if (!selectedMerchant && !merchantLoading) {
+    return (
+      <div className="p-6 md:p-8 max-w-5xl mx-auto w-full">
+        <div className="border border-border rounded-xl p-12 text-center bg-card space-y-4 shadow-2xs">
+          <div className="inline-flex h-12 w-12 rounded-full bg-amber-500/10 text-amber-600 items-center justify-center">
+            <AlertCircle className="h-6 w-6" />
+          </div>
+          <div className="space-y-1">
+            <h3 className="font-semibold text-lg text-foreground">No Merchant Account Found</h3>
+            <p className="text-sm text-muted-foreground">
+              No active merchant profile was found in the database. Please create a merchant profile or seed merchant data first.
+            </p>
+          </div>
+          <Button variant="outline" onClick={loadPolicyAndData}>
+            <RefreshCw className="h-4 w-4 mr-2" />
+            Retry
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  // Server Error state (only for genuine 500 / network errors)
+  if (error) {
     return (
       <div className="p-6 md:p-8 max-w-5xl mx-auto w-full">
         <div className="border border-border rounded-lg p-12 text-center bg-card space-y-4">
@@ -310,10 +400,11 @@ export function AgentBuilderPageContent() {
     );
   }
 
-  const isAgentActive = agentEnabled && (formPolicy.negotiationEnabled ?? true);
+  const isAgentActive = serverPolicy !== null && agentEnabled && (formPolicy.negotiationEnabled ?? true);
 
   return (
     <div className="p-6 md:p-8 space-y-6 max-w-5xl mx-auto w-full">
+
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-border pb-5">
         <div className="space-y-1">
@@ -322,32 +413,25 @@ export function AgentBuilderPageContent() {
               <Bot className="h-5 w-5" />
             </div>
             <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-foreground">
-              Negotiation Agent
+              Configure Negotiation Agent
             </h1>
-            {isAgentActive ? (
-              <Badge variant="success" className="ml-2">
-                ● Active
-              </Badge>
-            ) : (
-              <Badge variant="secondary" className="ml-2">
-                ○ Disabled
-              </Badge>
-            )}
           </div>
           <p className="text-sm text-muted-foreground">
-            Your AI agent negotiates with buyers using your products and merchant-defined commerce rules.
+            {mode === "CREATE"
+              ? "Define commercial policy and negotiation boundaries for your AI agent."
+              : "Update commercial policy and negotiation boundaries for your AI agent."}
           </p>
         </div>
 
         {/* Action Buttons */}
         <div className="flex items-center gap-2 shrink-0">
-          {isDirty && (
+          {mode === "EDIT" && isDirty && (
             <Button variant="outline" size="sm" onClick={handleDiscard} disabled={saving}>
               <RotateCcw className="h-4 w-4 mr-1.5" />
               Discard Changes
             </Button>
           )}
-          <Button size="sm" onClick={handleSave} disabled={!isDirty || saving}>
+          <Button size="sm" onClick={handleSave} disabled={saving}>
             {saving ? (
               <>
                 <RefreshCw className="h-4 w-4 mr-1.5 animate-spin" />
@@ -356,7 +440,7 @@ export function AgentBuilderPageContent() {
             ) : (
               <>
                 <Save className="h-4 w-4 mr-1.5" />
-                Save Changes
+                {mode === "EDIT" ? "Save Changes" : "Create Agent"}
               </>
             )}
           </Button>
@@ -371,30 +455,15 @@ export function AgentBuilderPageContent() {
         </div>
       )}
 
-      {isDirty && !saveSuccess && (
+      {isDirty && !saveSuccess && mode === "EDIT" && (
         <div className="p-3 rounded-md bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-200 text-xs flex items-center justify-between border border-amber-200 dark:border-amber-800">
           <span>You have unsaved changes. Click &quot;Save Changes&quot; to apply.</span>
           <span className="font-semibold text-[11px] uppercase tracking-wider">Unsaved</span>
         </div>
       )}
 
-      {/* No Policy State Prompt */}
-      {serverPolicy === null && !formPolicy.name && (
-        <Card className="p-8 text-center border-border shadow-sm bg-card space-y-4">
-          <div className="inline-flex h-12 w-12 rounded-full bg-primary/10 text-primary items-center justify-center">
-            <Sparkles className="h-6 w-6" />
-          </div>
-          <div className="space-y-1 max-w-md mx-auto">
-            <h3 className="font-semibold text-lg text-foreground">No commerce policy configured</h3>
-            <p className="text-sm text-muted-foreground">
-              Create a policy to control how your Negotiation Agent handles pricing, shipping, orders, and approvals.
-            </p>
-          </div>
-          <Button onClick={handleCreateInitialPolicy}>Create Policy</Button>
-        </Card>
-      )}
-
-      {(serverPolicy !== null || formPolicy.name) && (
+      {/* Normal Configuration Tabs */}
+      {(
         <Tabs defaultValue="pricing" className="space-y-6">
           <TabsList className="grid grid-cols-3 sm:grid-cols-6 w-full h-auto">
             <TabsTrigger value="general">General</TabsTrigger>
@@ -441,6 +510,21 @@ export function AgentBuilderPageContent() {
                     Optional description displayed in merchant portal.
                   </p>
                 </div>
+
+                <div className="space-y-2">
+                  <label htmlFor="policyName" className="text-xs font-medium text-foreground">
+                    Policy Name
+                  </label>
+                  <Input
+                    id="policyName"
+                    value={formPolicy.name ?? ""}
+                    onChange={(e) => handlePolicyChange("name", e.target.value)}
+                    placeholder="Merchant Commerce Policy"
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    Name for this commercial policy.
+                  </p>
+                </div>
               </CardContent>
             </Card>
 
@@ -466,8 +550,9 @@ export function AgentBuilderPageContent() {
                     type="number"
                     min={0}
                     max={100}
-                    value={formPolicy.maxDiscountPercent ?? 10}
-                    onChange={(e) => handlePolicyChange("maxDiscountPercent", Number(e.target.value))}
+                    placeholder="10"
+                    value={getFieldValue("maxDiscountPercent", 10)}
+                    onChange={(e) => handlePolicyChange("maxDiscountPercent", e.target.value === "" ? undefined : Number(e.target.value))}
                   />
                   <p className="text-[11px] text-muted-foreground">
                     Maximum percentage discount your agent may offer.
@@ -486,8 +571,9 @@ export function AgentBuilderPageContent() {
                     type="number"
                     min={0}
                     max={100}
-                    value={formPolicy.minMarginPercent ?? 20}
-                    onChange={(e) => handlePolicyChange("minMarginPercent", Number(e.target.value))}
+                    placeholder="20"
+                    value={getFieldValue("minMarginPercent", 20)}
+                    onChange={(e) => handlePolicyChange("minMarginPercent", e.target.value === "" ? undefined : Number(e.target.value))}
                   />
                   <p className="text-[11px] text-muted-foreground">
                     Minimum margin the merchant requires after discounts.
@@ -533,8 +619,9 @@ export function AgentBuilderPageContent() {
                     type="number"
                     min={0}
                     max={20}
-                    value={formPolicy.maxNegotiationRounds ?? 3}
-                    onChange={(e) => handlePolicyChange("maxNegotiationRounds", Number(e.target.value))}
+                    placeholder="3"
+                    value={getFieldValue("maxNegotiationRounds", 3)}
+                    onChange={(e) => handlePolicyChange("maxNegotiationRounds", e.target.value === "" ? undefined : Number(e.target.value))}
                   />
                   <p className="text-[11px] text-muted-foreground">
                     Maximum number of negotiation rounds allowed per buyer request.
@@ -565,8 +652,9 @@ export function AgentBuilderPageContent() {
                     id="freeShipping"
                     type="number"
                     min={0}
-                    value={formPolicy.freeShippingThreshold ?? 5000}
-                    onChange={(e) => handlePolicyChange("freeShippingThreshold", Number(e.target.value))}
+                    placeholder="5000"
+                    value={getFieldValue("freeShippingThreshold", 5000)}
+                    onChange={(e) => handlePolicyChange("freeShippingThreshold", e.target.value === "" ? undefined : Number(e.target.value))}
                   />
                   <p className="text-[11px] text-muted-foreground">
                     Orders at or above this value qualify for free shipping.
@@ -597,8 +685,9 @@ export function AgentBuilderPageContent() {
                     id="maxQty"
                     type="number"
                     min={1}
-                    value={formPolicy.maxQuantityPerOrder ?? 50}
-                    onChange={(e) => handlePolicyChange("maxQuantityPerOrder", Number(e.target.value))}
+                    placeholder="50"
+                    value={getFieldValue("maxQuantityPerOrder", 50)}
+                    onChange={(e) => handlePolicyChange("maxQuantityPerOrder", e.target.value === "" ? undefined : Number(e.target.value))}
                   />
                   <p className="text-[11px] text-muted-foreground">Maximum units per order.</p>
                   {fieldErrors.maxQuantityPerOrder && (
@@ -614,8 +703,9 @@ export function AgentBuilderPageContent() {
                     id="minVal"
                     type="number"
                     min={0}
-                    value={formPolicy.minOrderValue ?? 0}
-                    onChange={(e) => handlePolicyChange("minOrderValue", Number(e.target.value))}
+                    placeholder="0"
+                    value={getFieldValue("minOrderValue", 0)}
+                    onChange={(e) => handlePolicyChange("minOrderValue", e.target.value === "" ? undefined : Number(e.target.value))}
                   />
                   <p className="text-[11px] text-muted-foreground">Minimum total order value required.</p>
                   {fieldErrors.minOrderValue && (
@@ -631,8 +721,9 @@ export function AgentBuilderPageContent() {
                     id="maxVal"
                     type="number"
                     min={0}
-                    value={formPolicy.maxOrderValue ?? 100000}
-                    onChange={(e) => handlePolicyChange("maxOrderValue", Number(e.target.value))}
+                    placeholder="100000"
+                    value={getFieldValue("maxOrderValue", 100000)}
+                    onChange={(e) => handlePolicyChange("maxOrderValue", e.target.value === "" ? undefined : Number(e.target.value))}
                   />
                   <p className="text-[11px] text-muted-foreground">Maximum total order value allowed.</p>
                   {fieldErrors.maxOrderValue && (
@@ -673,8 +764,9 @@ export function AgentBuilderPageContent() {
                     id="autoLimit"
                     type="number"
                     min={0}
-                    value={formPolicy.autoApprovalLimit ?? 50000}
-                    onChange={(e) => handlePolicyChange("autoApprovalLimit", Number(e.target.value))}
+                    placeholder="50000"
+                    value={getFieldValue("autoApprovalLimit", 50000)}
+                    onChange={(e) => handlePolicyChange("autoApprovalLimit", e.target.value === "" ? undefined : Number(e.target.value))}
                   />
                   <p className="text-[11px] text-muted-foreground">
                     Orders up to this amount are approved automatically.

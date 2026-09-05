@@ -98,7 +98,52 @@ This document inventories all verified backend endpoints, request/response contr
 
 ---
 
-## 5. Architectural & Financial Rules Preserved
+## 5. Payments API (`/api/payments`)
+
+### `POST /api/payments/create-order`
+- **UI Action:** Triggered by `PAY_NOW` action button in `BuyerChat.tsx`.
+- **Request Body:** `{ agreementId: string }`.
+- **Response Format:**
+  ```json
+  {
+    "success": true,
+    "data": {
+      "keyId": "rzp_test_...",
+      "orderId": "order_...",
+      "amount": 2160000,
+      "currency": "INR",
+      "agreementId": "650000000000000000000001"
+    }
+  }
+  ```
+
+### `POST /api/payments/verify`
+- **UI Action:** Triggered by Razorpay Checkout success handler callback.
+- **Request Body:** `{ agreementId, razorpayPaymentId, razorpayOrderId, razorpaySignature }`.
+- **Response Format:**
+  ```json
+  {
+    "success": true,
+    "message": "Payment signature verified and captured successfully.",
+    "data": {
+      "paymentId": "650000000000000000000002",
+      "agreementId": "650000000000000000000001",
+      "razorpayPaymentId": "pay_...",
+      "razorpayOrderId": "order_...",
+      "status": "CAPTURED"
+    }
+  }
+  ```
+
+### `GET /api/payments/agreement/:agreementId`
+- **UI Action:** Fetches current backend payment status for an agreement.
+- **Response Format:** `{ success: true, data: { agreementId, status, razorpayOrderId, ... } }`.
+
+---
+
+## 6. Architectural & Financial Rules Preserved
 1. **Single Source of Truth for Shipping:** Only `Policy.freeShippingThreshold` determines free shipping. `Negotiation.freeDelivery` is never used or created.
-2. **No Frontend Financial Logic:** Margins, discounts, counter-offers, and rules are calculated strictly on the backend by `economicEngine.ts` and `policyEngine.ts`.
-3. **Zero External LLM Dependency:** No OpenRouter or Gemini calls are made for UI management.
+2. **Authoritative Payment Lifecycle:** `Buyer Chat → PAY_NOW → Agreement APPROVED & paymentReady → Create/Reuse Razorpay Order → Open Razorpay Checkout → Server HMAC Verification → Payment CAPTURED → Agreement COMPLETED`.
+3. **No Frontend Financial Logic:** Margins, discounts, counter-offers, payment amounts, and subunit conversions are calculated strictly on the backend.
+4. **Zero External LLM Dependency for Payments:** Payment operations (`create-order`, `verify`, `getPaymentStatus`) are completely deterministic.
+

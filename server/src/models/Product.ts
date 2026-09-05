@@ -15,7 +15,18 @@ export interface IProduct extends Document {
   deliveryDays: number;
   tags?: string[];
   imageUrl?: string;
+  image?: string;
   isNegotiable: boolean;
+  /**
+   * Generic structured attribute map for arbitrary product specifications.
+   * Examples:
+   *   Electronics:  { brand: "Apple", model: "MacBook Pro", ram: "16GB", storage: "512GB" }
+   *   Fashion:      { brand: "Nike", color: "black", size: "10" }
+   *   Furniture:    { adjustableHeight: true, ergonomic: true, material: "mesh" }
+   *   Groceries:    { weight: "5kg", organic: true }
+   * Keys and values are completely catalog-driven — no hardcoding per category.
+   */
+  specifications?: Map<string, string | number | boolean>;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -118,11 +129,26 @@ const productSchema = new Schema<IProduct>(
     ],
     imageUrl: {
       type: String,
+      trim: true,
+    },
+    image: {
+      type: String,
+      trim: true,
     },
     isNegotiable: {
       type: Boolean,
       required: true,
       default: true,
+    },
+    /**
+     * Generic key-value map for arbitrary product attributes.
+     * Supports any category: Electronics, Fashion, Furniture, Groceries, etc.
+     * No field names are hardcoded in the schema — all keys are catalog-driven.
+     */
+    specifications: {
+      type: Map,
+      of: Schema.Types.Mixed,
+      default: undefined,
     },
   },
   {
@@ -135,6 +161,15 @@ productSchema.index({ merchantId: 1 });
 productSchema.index({ category: 1 });
 productSchema.index({ status: 1 });
 productSchema.index({ merchantId: 1, status: 1 });
+
+productSchema.pre("save", function () {
+  if (this.image && !this.imageUrl) {
+    this.imageUrl = this.image;
+  }
+  if (this.imageUrl && !this.image) {
+    this.image = this.imageUrl;
+  }
+});
 
 const Product = mongoose.model<IProduct>("Product", productSchema);
 

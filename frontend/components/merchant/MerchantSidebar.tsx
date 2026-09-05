@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   Bot,
   Package,
@@ -10,12 +10,15 @@ import {
   BarChart3,
   Settings,
   Store,
+  ClipboardList,
   Menu,
   X,
+  LogOut,
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/hooks/useAuth";
 import type { Merchant } from "@/types/merchant";
 
 interface MerchantSidebarProps {
@@ -27,13 +30,25 @@ const navigationItems = [
   { name: "Products", href: "/merchant/products", icon: Package },
   { name: "Negotiations", href: "/merchant/negotiations", icon: Handshake },
   { name: "Orders", href: "/merchant/orders", icon: ShoppingCart },
+  { name: "Audit Logs", href: "/merchant/audit-logs", icon: ClipboardList },
   { name: "Analytics", href: "/merchant/analytics", icon: BarChart3 },
   { name: "Settings", href: "/merchant/settings", icon: Settings },
 ];
 
 export function MerchantSidebar({ currentMerchant }: MerchantSidebarProps) {
   const pathname = usePathname();
+  const router = useRouter();
+  const { user, logout } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  const handleLogout = async () => {
+    await logout();
+    router.replace("/merchant/login");
+  };
+
+  const displayName = user?.name || currentMerchant?.name || "Merchant Owner";
+  const displayEmail = user?.email || currentMerchant?.email || "merchant@store.com";
+  const businessName = currentMerchant?.businessName || currentMerchant?.name || "Agentic Commerce";
 
   const navContent = (
     <div className="flex flex-col h-full bg-card border-r border-border w-64 text-card-foreground">
@@ -44,7 +59,7 @@ export function MerchantSidebar({ currentMerchant }: MerchantSidebarProps) {
         </div>
         <div className="flex flex-col overflow-hidden">
           <span className="font-semibold text-sm truncate">
-            {currentMerchant?.businessName || currentMerchant?.name || "Agentic Commerce"}
+            {businessName}
           </span>
           <span className="text-xs text-muted-foreground truncate">
             Merchant Portal
@@ -80,20 +95,30 @@ export function MerchantSidebar({ currentMerchant }: MerchantSidebarProps) {
       </nav>
 
       {/* Footer Profile */}
-      <div className="p-4 border-t border-border mt-auto">
-        <div className="flex items-center gap-3 px-2 py-1">
-          <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center font-semibold text-xs text-muted-foreground uppercase">
-            {(currentMerchant?.name || "M").charAt(0)}
+      <div className="p-4 border-t border-border mt-auto space-y-3">
+        <div className="flex items-center gap-3 px-1 py-1">
+          <div className="h-8 w-8 rounded-full bg-primary/10 text-primary flex items-center justify-center font-semibold text-xs uppercase shrink-0 border border-primary/20">
+            {displayName.charAt(0)}
           </div>
           <div className="flex flex-col overflow-hidden text-xs">
             <span className="font-medium text-foreground truncate">
-              {currentMerchant?.name || "Merchant"}
+              {displayName}
             </span>
             <span className="text-muted-foreground truncate">
-              {currentMerchant?.email || "merchant@store.com"}
+              {displayEmail}
             </span>
           </div>
         </div>
+
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleLogout}
+          className="w-full text-xs gap-2 text-muted-foreground hover:text-destructive hover:border-destructive/30"
+        >
+          <LogOut className="h-3.5 w-3.5" />
+          Logout
+        </Button>
       </div>
     </div>
   );

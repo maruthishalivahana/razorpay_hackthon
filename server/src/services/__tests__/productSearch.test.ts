@@ -46,6 +46,12 @@ describe("Product Search Service Tests", () => {
         inventory: 10,
         status: "active",
         tags: ["laptop", "16gb", "512gb"],
+        // Structured specifications for generic attribute matching
+        specifications: new Map<string, any>([
+          ["ram", "16GB"],
+          ["storage", "512GB"],
+          ["brand", "Lenovo"],
+        ]),
       },
       {
         merchantId: merchant._id,
@@ -59,6 +65,11 @@ describe("Product Search Service Tests", () => {
         inventory: 5,
         status: "active",
         tags: ["laptop", "16gb", "ryzen"],
+        specifications: new Map<string, any>([
+          ["ram", "16GB"],
+          ["storage", "1TB"],
+          ["brand", "ASUS"],
+        ]),
       },
       {
         merchantId: merchant._id,
@@ -72,6 +83,11 @@ describe("Product Search Service Tests", () => {
         inventory: 3,
         status: "active",
         tags: ["laptop", "32gb", "premium"],
+        specifications: new Map<string, any>([
+          ["ram", "32GB"],
+          ["storage", "1TB"],
+          ["brand", "Dell"],
+        ]),
       },
       {
         merchantId: merchant._id,
@@ -85,6 +101,10 @@ describe("Product Search Service Tests", () => {
         inventory: 0, // Out of stock
         status: "active",
         tags: ["laptop", "budget"],
+        specifications: new Map<string, any>([
+          ["ram", "8GB"],
+          ["brand", "Acer"],
+        ]),
       },
       {
         merchantId: merchant._id,
@@ -98,6 +118,16 @@ describe("Product Search Service Tests", () => {
         inventory: 15,
         status: "active",
         tags: ["chair", "office"],
+        // Comprehensive specs for all attribute tests
+        specifications: new Map<string, any>([
+          ["ergonomic", true],
+          ["adjustableHeight", true],
+          ["lumbarSupport", true],
+          ["comfortable", true],
+          ["goodForLongHours", true],
+          ["useCase", "home workspace"],
+          ["material", "mesh"],
+        ]),
       },
     ]);
   });
@@ -277,7 +307,7 @@ describe("Product Search Service Tests", () => {
     assert.ok(!skus.includes("Acer Aspire 3 Budget Laptop"));
   });
 
-  test("TEST 20: Specification matching", async () => {
+  test("TEST 20: Specification matching via structured specs", async () => {
     const res = await searchProducts({
       merchantId: merchant._id.toString(),
       query: "laptop",
@@ -287,7 +317,6 @@ describe("Product Search Service Tests", () => {
     assert.equal(res.products[0].name, "Dell XPS 13 Premium Laptop");
   });
 
-  
   test("TEST 21: Multi-word query 'office chair'", async () => {
     const res = await searchProducts({ merchantId: merchant._id.toString(), query: "office chair" });
     assert.ok(res.returned > 0);
@@ -356,7 +385,7 @@ describe("Product Search Service Tests", () => {
   test("TEST 36: Sorting after multi-word search", async () => {
     const res = await searchProducts({ merchantId: merchant._id.toString(), query: "office chair", sortBy: "price_asc" });
     for (let i = 0; i < res.products.length - 1; i++) {
-      assert.ok(res.products[i].price <= res.products[i+1].price);
+      assert.ok(res.products[i].price <= res.products[i + 1].price);
     }
   });
 
@@ -376,27 +405,33 @@ describe("Product Search Service Tests", () => {
     assert.deepEqual(res.products, []);
   });
 
-  test("TEST 41: ergonomic=true", async () => {
+  test("TEST 41: ergonomic=true matched via structured spec", async () => {
     const res = await searchProducts({ merchantId: merchant._id.toString(), query: "office chair", requirements: { ergonomic: true } });
     assert.ok(res.returned > 0);
+    assert.ok(res.products.every(p => p.specifications?.ergonomic === true));
   });
 
-  test("TEST 44: string requirements", async () => {
+  test("TEST 44: string requirements matched case-insensitively via spec", async () => {
+    // Dell XPS has spec.ram = "32GB"; "32gb" should match case-insensitively
     const res = await searchProducts({ merchantId: merchant._id.toString(), query: "laptop", requirements: { ram: "32gb" } });
     assert.ok(res.returned > 0);
+    assert.equal(res.products[0].name, "Dell XPS 13 Premium Laptop");
   });
 
-  test("TEST 45: boolean normalization", async () => {
+  test("TEST 45: boolean normalization: ergonomic='yes' matches spec.ergonomic=true", async () => {
     const res = await searchProducts({ merchantId: merchant._id.toString(), query: "office chair", requirements: { ergonomic: "yes" } });
     assert.ok(res.returned > 0);
   });
 
-  test("TEST 46: unsupported requirement does not eliminate products", async () => {
+  test("TEST 46: unknown hard requirement excludes all products (catalog cannot verify)", async () => {
+    // flyingCapability is not in any product spec and not in any text →
+    // hard requirement not satisfiable → 0 results (correct, no false positives)
     const res = await searchProducts({ merchantId: merchant._id.toString(), query: "office chair", requirements: { flyingCapability: true } });
-    assert.ok(res.returned > 0);
+    assert.equal(res.returned, 0);
   });
 
-  test("TEST 47: supported requirement filters while unsupported requirement does not filter", async () => {
+  test("TEST 47: multiple hard requirements all matched via spec", async () => {
+    // Chair has all three in specifications
     const res = await searchProducts({
       merchantId: merchant._id.toString(),
       query: "office chair",
@@ -409,7 +444,8 @@ describe("Product Search Service Tests", () => {
     assert.ok(res.returned > 0);
   });
 
-  test("TEST 48: unsupported requirement only returns products matching base query", async () => {
+  test("TEST 48: hard requirements satisfied by spec return results", async () => {
+    // Chair has comfortable=true and goodForLongHours=true in specs
     const res = await searchProducts({
       merchantId: merchant._id.toString(),
       query: "office chair",

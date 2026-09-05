@@ -116,8 +116,18 @@ export function ProductsPageContent() {
     setDeleteDialogOpen(true);
   };
 
-  const handleMutationSuccess = (actionText: string) => {
+  const handleMutationSuccess = (actionText: string, savedProduct?: Product) => {
     showToast(actionText);
+    if (savedProduct && (savedProduct._id || savedProduct.id)) {
+      const savedId = savedProduct._id || savedProduct.id;
+      setProducts((prev) => {
+        const exists = prev.some((p) => (p._id || p.id) === savedId);
+        if (exists) {
+          return prev.map((p) => ((p._id || p.id) === savedId ? savedProduct : p));
+        }
+        return [savedProduct, ...prev];
+      });
+    }
     loadProducts();
   };
 
@@ -311,7 +321,12 @@ export function ProductsPageContent() {
         merchantId={selectedMerchant?._id || ""}
         open={formDialogOpen}
         onClose={() => setFormDialogOpen(false)}
-        onSuccess={() => handleMutationSuccess(activeProduct ? "Product updated successfully." : "Product created successfully.")}
+        onSuccess={(savedProduct) =>
+          handleMutationSuccess(
+            activeProduct ? "Product updated successfully." : "Product created successfully.",
+            savedProduct
+          )
+        }
       />
 
       <ProductDetailDialog

@@ -32,6 +32,24 @@ export const createMerchantSchema = z.object({
 
 export const updateMerchantSchema = createMerchantSchema.partial();
 
+export const imageUrlSchema = z
+  .string()
+  .trim()
+  .refine(
+    (val) => {
+      if (!val) return true;
+      try {
+        const parsed = new URL(val);
+        return parsed.protocol === "http:" || parsed.protocol === "https:";
+      } catch {
+        return false;
+      }
+    },
+    { message: "Image URL must be a valid HTTP or HTTPS URL" }
+  )
+  .optional()
+  .nullable();
+
 export const createProductSchema = z.object({
   merchantId: objectIdSchema,
   name: z
@@ -67,8 +85,12 @@ export const createProductSchema = z.object({
     .min(0, "Delivery days cannot be negative")
     .optional(),
   tags: z.array(z.string()).optional(),
-  imageUrl: z.string().optional(),
+  imageUrl: imageUrlSchema,
+  image: imageUrlSchema,
   isNegotiable: z.boolean().optional(),
+  specifications: z
+    .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
+    .optional(),
 });
 
 export const updateProductSchema = createProductSchema.partial();

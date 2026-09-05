@@ -1,7 +1,18 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { RefreshCw, Search, Handshake, AlertCircle, MessageSquareX, CheckCircle, Clock } from "lucide-react";
+import Link from "next/link";
+import {
+  RefreshCw,
+  Search,
+  Handshake,
+  AlertCircle,
+  MessageSquareX,
+  CheckCircle,
+  Clock,
+  XCircle,
+  Sparkles,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -39,7 +50,7 @@ export function NegotiationsPageContent() {
     return () => clearTimeout(timer);
   }, [search]);
 
-  // Load negotiations
+  // Load negotiations callback for manual refresh
   const loadNegotiations = useCallback(async () => {
     try {
       setLoading(true);
@@ -61,19 +72,47 @@ export function NegotiationsPageContent() {
       } else {
         throw new Error("Invalid API response");
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error loading negotiations:", err);
       setError("Unable to load negotiations.");
     } finally {
       setLoading(false);
     }
-  }, [selectedMerchant?._id, statusFilter, debouncedSearch, page]);
+  }, [selectedMerchant, statusFilter, debouncedSearch, page]);
 
   useEffect(() => {
+    let ignore = false;
     if (!merchantLoading) {
-      loadNegotiations();
+      fetchNegotiations({
+        merchantId: selectedMerchant?._id,
+        status: statusFilter !== "ALL" ? statusFilter : undefined,
+        search: debouncedSearch.trim() || undefined,
+        page,
+        limit: 20,
+      })
+        .then((res) => {
+          if (!ignore) {
+            if (res.success && Array.isArray(res.data)) {
+              setNegotiations(res.data);
+              if (res.pagination) {
+                setPagination(res.pagination);
+              }
+            }
+            setLoading(false);
+          }
+        })
+        .catch((err) => {
+          if (!ignore) {
+            console.error("Error loading negotiations:", err);
+            setError("Unable to load negotiations.");
+            setLoading(false);
+          }
+        });
     }
-  }, [merchantLoading, loadNegotiations]);
+    return () => {
+      ignore = true;
+    };
+  }, [merchantLoading, selectedMerchant, statusFilter, debouncedSearch, page]);
 
   const handleClearFilters = () => {
     setSearch("");
@@ -89,24 +128,25 @@ export function NegotiationsPageContent() {
 
   const isFilterActive = Boolean(debouncedSearch.trim() || statusFilter !== "ALL");
 
-  // Summary Metrics
+  // Summary Metrics calculated directly from backend data
   const activeCount = negotiations.filter((n) => n.status === "ACTIVE").length;
   const acceptedCount = negotiations.filter((n) => n.status === "ACCEPTED").length;
+  const expiredCount = negotiations.filter((n) => n.status === "EXPIRED" || n.status === "REJECTED").length;
   const totalCount = pagination?.total ?? negotiations.length;
 
   return (
     <div className="p-6 md:p-8 space-y-6 max-w-7xl mx-auto w-full">
-      {/* Header */}
+      {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-foreground">
             Negotiations
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Monitor and manage buyer negotiations handled by your commerce agent.
+            Monitor conversations and offers handled by your Negotiation Agent.
           </p>
         </div>
-        <div className="shrink-0">
+        <div className="shrink-0 flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={loadNegotiations} disabled={loading}>
             <RefreshCw className={`h-4 w-4 mr-1.5 ${loading ? "animate-spin" : ""}`} />
             Refresh
@@ -114,12 +154,12 @@ export function NegotiationsPageContent() {
         </div>
       </div>
 
-      {/* Summary Cards */}
+      {/* Top Summary Cards */}
       {!loading && !error && negotiations.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <Card className="border-border shadow-sm">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <Card className="border-border shadow-xs">
             <CardHeader className="p-4 flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-xs font-medium text-muted-foreground">Active Negotiations</CardTitle>
+              <CardTitle className="text-xs font-medium text-muted-foreground">Active</CardTitle>
               <Clock className="h-4 w-4 text-blue-600" />
             </CardHeader>
             <CardContent className="p-4 pt-0">
@@ -127,9 +167,9 @@ export function NegotiationsPageContent() {
             </CardContent>
           </Card>
 
-          <Card className="border-border shadow-sm">
+          <Card className="border-border shadow-xs">
             <CardHeader className="p-4 flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-xs font-medium text-muted-foreground">Accepted Deals</CardTitle>
+              <CardTitle className="text-xs font-medium text-muted-foreground">Accepted</CardTitle>
               <CheckCircle className="h-4 w-4 text-emerald-600" />
             </CardHeader>
             <CardContent className="p-4 pt-0">
@@ -137,7 +177,17 @@ export function NegotiationsPageContent() {
             </CardContent>
           </Card>
 
-          <Card className="border-border shadow-sm">
+          <Card className="border-border shadow-xs">
+            <CardHeader className="p-4 flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-xs font-medium text-muted-foreground">Expired / Rejected</CardTitle>
+              <XCircle className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent className="p-4 pt-0">
+              <div className="text-2xl font-bold text-foreground">{expiredCount}</div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-border shadow-xs">
             <CardHeader className="p-4 flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-xs font-medium text-muted-foreground">Total Handled</CardTitle>
               <Handshake className="h-4 w-4 text-primary" />
@@ -149,7 +199,7 @@ export function NegotiationsPageContent() {
         </div>
       )}
 
-      {/* Search & Filter Bar */}
+      {/* Search & Filter Controls */}
       <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -168,6 +218,7 @@ export function NegotiationsPageContent() {
             setPage(1);
           }}
           className="h-9 px-3 rounded-md border border-input bg-card text-sm font-medium focus:outline-none focus:ring-1 focus:ring-ring text-foreground"
+          aria-label="Filter negotiations by status"
         >
           <option value="ALL">All Statuses</option>
           <option value="ACTIVE">Active</option>
@@ -186,7 +237,7 @@ export function NegotiationsPageContent() {
           <Skeleton className="h-16 w-full" />
         </div>
       ) : error ? (
-        <div className="border border-border rounded-lg p-12 text-center bg-card space-y-4">
+        <div className="border border-border rounded-xl p-12 text-center bg-card space-y-4 shadow-xs">
           <div className="inline-flex h-12 w-12 rounded-full bg-destructive/10 text-destructive items-center justify-center">
             <AlertCircle className="h-6 w-6" />
           </div>
@@ -202,7 +253,7 @@ export function NegotiationsPageContent() {
       ) : negotiations.length === 0 ? (
         isFilterActive ? (
           /* Search Empty State */
-          <div className="border border-border rounded-lg p-12 text-center bg-card space-y-4">
+          <div className="border border-border rounded-xl p-12 text-center bg-card space-y-4 shadow-xs">
             <div className="inline-flex h-12 w-12 rounded-full bg-muted text-muted-foreground items-center justify-center">
               <MessageSquareX className="h-6 w-6" />
             </div>
@@ -216,20 +267,28 @@ export function NegotiationsPageContent() {
           </div>
         ) : (
           /* Empty History State */
-          <div className="border border-border rounded-lg p-12 text-center bg-card space-y-4">
+          <div className="border border-border rounded-xl p-12 text-center bg-card space-y-4 shadow-xs">
             <div className="inline-flex h-12 w-12 rounded-full bg-primary/10 text-primary items-center justify-center">
               <Handshake className="h-6 w-6" />
             </div>
-            <div className="space-y-1 max-w-sm mx-auto">
+            <div className="space-y-1 max-w-md mx-auto">
               <h3 className="font-semibold text-lg text-foreground">No negotiations yet</h3>
               <p className="text-sm text-muted-foreground">
-                Buyer negotiations will appear here when your commerce agent starts negotiating with customers.
+                Buyer conversations handled by your Negotiation Agent will appear here.
               </p>
+            </div>
+            <div className="pt-2">
+              <Link href="/merchant/agent-builder">
+                <Button variant="outline" size="sm">
+                  <Sparkles className="h-4 w-4 mr-1.5 text-primary" />
+                  View Agent Builder
+                </Button>
+              </Link>
             </div>
           </div>
         )
       ) : (
-        /* Negotiations Table */
+        /* Negotiations Table & Pagination */
         <div className="space-y-4">
           <NegotiationTable negotiations={negotiations} onViewDetail={handleViewDetail} />
 
@@ -262,7 +321,7 @@ export function NegotiationsPageContent() {
         </div>
       )}
 
-      {/* Detail Dialog */}
+      {/* Detail Dialog Modal */}
       <NegotiationDetailDialog
         negotiation={selectedNegotiation}
         open={dialogOpen}

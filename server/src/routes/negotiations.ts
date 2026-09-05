@@ -1,4 +1,5 @@
-import { Router, type Request, type Response, type NextFunction } from "express";
+import { Router } from "express";
+import type { Request, Response, NextFunction } from "express";
 import {
   startNegotiationSchema,
   submitBuyerOfferSchema,
@@ -13,11 +14,15 @@ import {
   rejectNegotiation,
 } from "../services/negotiationService.js";
 
+import { requireAuth, requireRole, optionalAuth } from "../middleware/auth.js";
+import { AppCustomError } from "../services/negotiationService.js";
+
 const router = Router();
 
 // POST /api/negotiations - Start negotiation
 router.post(
   "/",
+  optionalAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const validatedData = startNegotiationSchema.parse(req.body);
@@ -35,11 +40,18 @@ router.post(
 // GET /api/negotiations - List negotiations with filters and pagination
 router.get(
   "/",
+  optionalAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { merchantId, status, search, page, limit } = req.query;
+      const { merchantId: queryMerchantId, status, search, page, limit } = req.query;
+
+      const effectiveMerchantId =
+        req.user?.role === "MERCHANT" && req.user.merchantId
+          ? req.user.merchantId
+          : queryMerchantId ? String(queryMerchantId) : undefined;
+
       const result = await getAllNegotiations({
-        merchantId: merchantId ? String(merchantId) : undefined,
+        merchantId: effectiveMerchantId,
         status: status ? String(status) : undefined,
         search: search ? String(search) : undefined,
         page: page ? String(page) : undefined,
@@ -60,10 +72,18 @@ router.get(
 // GET /api/negotiations/:id - Get negotiation by ID
 router.get(
   "/:id",
+  optionalAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const id = String(req.params.id);
       const negotiation = await getNegotiationById(id);
+
+      if (req.user?.role === "MERCHANT" && req.user.merchantId) {
+        if (negotiation.merchantId.toString() !== req.user.merchantId) {
+          throw new AppCustomError("FORBIDDEN", "You don't have permission to access this resource.", 403);
+        }
+      }
+
       return res.status(200).json({
         success: true,
         data: negotiation,

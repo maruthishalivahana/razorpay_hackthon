@@ -6,8 +6,11 @@ import Negotiation, {
 import Merchant from "../models/Merchant.js";
 import Product from "../models/Product.js";
 import Policy from "../models/Policy.js";
+import Conversation from "../models/Conversation.js";
 import { calculateEconomicOffer, roundMoney, roundPercent } from "./economicEngine.js";
 import { evaluatePolicy } from "./policyEngine.js";
+import { createAuditEvent, getAuditEventsForNegotiation } from "./auditService.js";
+import { getCurrentPolicyForMerchant } from "./policyService.js";
 
 export class AppCustomError extends Error {
   public code: string;
@@ -15,6 +18,7 @@ export class AppCustomError extends Error {
 
   constructor(code: string, message: string, statusCode: number) {
     super(message);
+    this.name = "AppCustomError";
     this.code = code;
     this.statusCode = statusCode;
     Object.setPrototypeOf(this, new.target.prototype);
@@ -110,7 +114,7 @@ export const startNegotiation = async (
     );
   }
 
-  const normalizedCurrency = currency.trim().toUpperCase();
+  const normalizedCurrency = (currency || "INR").trim().toUpperCase();
   const allowedCurrencies = (policy.allowedCurrencies || []).map((c) =>
     c.toUpperCase()
   );
@@ -208,10 +212,21 @@ export const submitBuyerOffer = async (
     throw new AppCustomError("INVALID_PRODUCT", "Product not found", 404);
   }
 
-  const policy = await Policy.findById(negotiation.policyId);
-  if (!policy) {
-    throw new AppCustomError("INVALID_POLICY", "Policy not found", 404);
+  const policy = await getCurrentPolicyForMerchant(negotiation.merchantId.toString());
+  if (policy._id.toString() !== negotiation.policyId.toString()) {
+    negotiation.policyId = policy._id;
   }
+
+  console.log("[POLICY_EVALUATION]", JSON.stringify({
+    merchantId: negotiation.merchantId.toString(),
+    policyId: policy._id.toString(),
+    maxDiscountPercent: policy.maxDiscountPercent,
+    minMarginPercent: policy.minMarginPercent,
+    autoApprovalLimit: policy.autoApprovalLimit,
+    requestedDiscount: ((product.price - buyerOffer) / product.price) * 100,
+    productPrice: product.price,
+    costPrice: product.costPrice,
+  }));
 
   if (!policy.negotiationEnabled) {
     negotiation.status = "REJECTED";
@@ -248,6 +263,39 @@ export const submitBuyerOffer = async (
     unitPrice: buyerOffer,
     currency: negotiation.currency,
     negotiationRequested: true,
+  });
+
+  await createAuditEvent({
+    merchantId: negotiation.merchantId,
+    negotiationId: negotiation._id,
+    productId: product._id,
+    eventType: "POLICY_EVALUATED",
+    actorType: "AGENT",
+    description: `Policy evaluated buyer offer at ${buyerOffer} per unit: ${policyResult.decision}.`,
+    data: {
+      productId: product._id.toString(),
+      productPrice: product.price,
+      costPrice: product.costPrice,
+      requestedDiscountPercent: policyResult.evaluatedValues.discountPercent,
+      maximumDiscountPercent: policy.maxDiscountPercent,
+      minimumProfitMarginPercent: policy.minMarginPercent,
+      calculatedFinalPrice: policyResult.evaluatedValues.unitPrice,
+      calculatedProfit: roundMoney(
+        (policyResult.evaluatedValues.unitPrice - product.costPrice) * negotiation.quantity
+      ),
+      calculatedMarginPercent: policyResult.evaluatedValues.marginPercent,
+      autoApprovalLimit: policy.autoApprovalLimit,
+      approvalRequired: policyResult.approvalRequired,
+      decision: policyResult.allowed
+        ? "AUTO_APPROVED"
+        : policyResult.approvalRequired
+          ? "MERCHANT_APPROVAL_REQUIRED"
+          : "BLOCKED",
+      policyDecision: policyResult.decision,
+      reasons: policyResult.reasons,
+      violations: policyResult.violations,
+      currency: negotiation.currency,
+    },
   });
 
   // Record Buyer offer in history
@@ -407,9 +455,9 @@ export const acceptNegotiation = async (
     throw new AppCustomError("INVALID_PRODUCT", "Product not found", 404);
   }
 
-  const policy = await Policy.findById(negotiation.policyId);
-  if (!policy) {
-    throw new AppCustomError("INVALID_POLICY", "Policy not found", 404);
+  const policy = await getCurrentPolicyForMerchant(negotiation.merchantId.toString());
+  if (policy._id.toString() !== negotiation.policyId.toString()) {
+    negotiation.policyId = policy._id;
   }
 
   const economicResult = calculateEconomicOffer({
@@ -476,7 +524,7 @@ export const rejectNegotiation = async (
 
 export const getNegotiationById = async (
   id: string
-): Promise<INegotiation> => {
+): Promise<any> => {
   if (!mongoose.Types.ObjectId.isValid(id)) {
     throw new AppCustomError(
       "NEGOTIATION_NOT_FOUND",
@@ -486,9 +534,9 @@ export const getNegotiationById = async (
   }
 
   const negotiation = await Negotiation.findById(id)
-    .populate("merchantId", "name businessName email")
-    .populate("productId", "name sku price costPrice")
-    .populate("policyId", "name maxDiscountPercent minMarginPercent");
+    .populate("merchantId", "name businessName email currency")
+    .populate("productId", "name sku price costPrice category imageUrl deliveryDays isNegotiable")
+    .populate("policyId", "name maxDiscountPercent minMarginPercent freeShippingThreshold autoApprovalLimit");
 
   if (!negotiation) {
     throw new AppCustomError(
@@ -498,7 +546,56 @@ export const getNegotiationById = async (
     );
   }
 
-  return negotiation;
+  // Retrieve associated conversation messages if available
+  let conversation: any = null;
+  try {
+    const convDoc = await Conversation.findOne({
+      $or: [
+        { "buyerState.negotiationId": id },
+        { "buyerState.negotiationId": new mongoose.Types.ObjectId(id) },
+      ],
+    }).select("conversationId messages createdAt updatedAt");
+
+    if (convDoc) {
+      conversation = {
+        conversationId: convDoc.conversationId,
+        messages: convDoc.messages,
+        createdAt: convDoc.createdAt,
+        updatedAt: convDoc.updatedAt,
+      };
+    }
+  } catch {
+    // Non-fatal fallback
+  }
+
+  // Retrieve associated audit events if available
+  let auditEvents: any[] = [];
+  try {
+    auditEvents = await getAuditEventsForNegotiation(id);
+  } catch {
+    // Non-fatal fallback
+  }
+
+  const negObj = negotiation.toObject ? negotiation.toObject() : negotiation;
+
+  // Derive free delivery eligibility from Policy.freeShippingThreshold
+  let freeDeliveryEligible: boolean | undefined = undefined;
+  const policy = negotiation.policyId as any;
+  if (policy && typeof policy.freeShippingThreshold === "number" && policy.freeShippingThreshold > 0) {
+    const effectiveUnitPrice =
+      negotiation.acceptedPrice ??
+      negotiation.currentMerchantOffer ??
+      negotiation.originalUnitPrice;
+    const orderValue = effectiveUnitPrice * negotiation.quantity;
+    freeDeliveryEligible = orderValue >= policy.freeShippingThreshold;
+  }
+
+  return {
+    ...negObj,
+    conversation,
+    auditEvents,
+    freeDeliveryEligible,
+  };
 };
 
 export interface GetNegotiationsQuery {
@@ -523,6 +620,17 @@ export const getAllNegotiations = async (query: GetNegotiationsQuery = {}) => {
     filter.status = query.status.toUpperCase();
   }
 
+  if (query.search && query.search.trim()) {
+    const trimmed = query.search.trim();
+    const matchingProducts = await Product.find({
+      $or: [
+        { name: { $regex: trimmed, $options: "i" } },
+        { sku: { $regex: trimmed, $options: "i" } },
+      ],
+    }).distinct("_id");
+    filter.productId = { $in: matchingProducts };
+  }
+
   const page = Math.max(1, parseInt(String(query.page || "1"), 10) || 1);
   const limit = Math.min(
     100,
@@ -533,13 +641,29 @@ export const getAllNegotiations = async (query: GetNegotiationsQuery = {}) => {
   const total = await Negotiation.countDocuments(filter);
   const totalPages = Math.ceil(total / limit) || 1;
 
-  const data = await Negotiation.find(filter)
-    .populate("merchantId", "name businessName email")
+  const rawData = await Negotiation.find(filter)
+    .populate("merchantId", "name businessName email currency")
     .populate("productId", "name sku price category imageUrl deliveryDays")
     .populate("policyId", "name maxDiscountPercent minMarginPercent freeShippingThreshold autoApprovalLimit")
     .sort({ createdAt: -1 })
     .skip(skip)
     .limit(limit);
+
+  const data = rawData.map((neg) => {
+    const negObj = neg.toObject ? neg.toObject() : neg;
+    let freeDeliveryEligible: boolean | undefined = undefined;
+    const policy = neg.policyId as any;
+    if (policy && typeof policy.freeShippingThreshold === "number" && policy.freeShippingThreshold > 0) {
+      const effectiveUnitPrice =
+        neg.acceptedPrice ?? neg.currentMerchantOffer ?? neg.originalUnitPrice;
+      const orderValue = effectiveUnitPrice * neg.quantity;
+      freeDeliveryEligible = orderValue >= policy.freeShippingThreshold;
+    }
+    return {
+      ...negObj,
+      freeDeliveryEligible,
+    };
+  });
 
   return {
     data,

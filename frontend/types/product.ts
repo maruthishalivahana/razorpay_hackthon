@@ -1,3 +1,11 @@
+export type SpecificationValue = string | number | boolean;
+
+export interface ProductSpecification {
+  key: string;
+  value: SpecificationValue;
+  type: "string" | "number" | "boolean";
+}
+
 export interface Product {
   _id?: string;
   id?: string;
@@ -13,7 +21,13 @@ export interface Product {
   deliveryDays: number;
   tags?: string[];
   imageUrl?: string;
+  image?: string;
   isNegotiable: boolean;
+  /**
+   * Structured key-value attributes for product specifications.
+   * e.g., { brand: "Apple", model: "MacBook Pro", ram: "16GB", storage: "512GB" }
+   */
+  specifications?: Record<string, SpecificationValue>;
   status: "active" | "inactive" | "out_of_stock" | string;
   createdAt?: string;
   updatedAt?: string;

@@ -113,14 +113,25 @@ export const selectProductFromSearchResults = (
     };
   }
 
-  // 1. Ordinal / Numerical Index (e.g. "first", "2", "option 3", "last")
-  if (refStr === "last" || refStr === "the last one" || refStr === "last one") {
+  // 1. Ordinal / Numerical Index (e.g. "first", "2", "option 3", "last", "middle")
+  if (refStr === "last" || refStr === "the last one" || refStr === "last one" || refStr === "the last product") {
     const lastProduct = products[products.length - 1];
     return {
       success: true,
       selectedProductId: lastProduct.id,
       selectedProductName: lastProduct.name,
       product: lastProduct,
+    };
+  }
+
+  if (/(?:the\s+one\s+in\s+the\s+middle|middle\s+one|middle\s+option|in\s+the\s+middle|middle\s+product)/i.test(refStr)) {
+    const middleIdx = Math.max(0, Math.ceil(products.length / 2) - 1);
+    const middleProduct = products[middleIdx];
+    return {
+      success: true,
+      selectedProductId: middleProduct.id,
+      selectedProductName: middleProduct.name,
+      product: middleProduct,
     };
   }
 
@@ -199,9 +210,40 @@ export const selectProductFromSearchResults = (
     }
   }
 
-  // 5. Product Name / Text Reference
-  const lowerRef = refStr.replace(/^(?:the|i\s+want|select|buy|choose|show\s+me)\s+/i, "").trim();
-  if (lowerRef.length > 0 && lowerRef !== "that one" && lowerRef !== "that" && lowerRef !== "this one" && lowerRef !== "it") {
+  // 5. Contextual Demonstratives ("that one", "this one", "that", "this", "it")
+  const lowerRef = refStr.replace(/^(?:the|i\s+want|select|buy|choose|show\s+me|i'll\s+go\s+with|lets\s+go\s+with|let's\s+go\s+with|take|go\s+with)\s+/i, "").trim();
+  const isDemonstrative = /^(?:that\s+one|this\s+one|that|this|it|that\s+product|this\s+product)$/i.test(lowerRef) || /^(?:that\s+one|this\s+one|that|this|it)$/i.test(refStr);
+
+  if (isDemonstrative) {
+    if (currentState.selectedProductId) {
+      const selected = products.find((p) => p.id === currentState.selectedProductId);
+      if (selected) {
+        return {
+          success: true,
+          selectedProductId: selected.id,
+          selectedProductName: selected.name,
+          product: selected,
+        };
+      }
+    }
+    if (products.length === 1) {
+      const selected = products[0];
+      return {
+        success: true,
+        selectedProductId: selected.id,
+        selectedProductName: selected.name,
+        product: selected,
+      };
+    }
+    return {
+      success: false,
+      code: "PRODUCT_REFERENCE_AMBIGUOUS",
+      message: `There are ${products.length} options available. Which one did you mean? (e.g. the first or second option)`,
+    };
+  }
+
+  // 6. Product Name / Text Reference
+  if (lowerRef.length > 0) {
     // Exact name match
     const exactName = products.filter((p) => p.name.toLowerCase() === lowerRef);
     if (exactName.length === 1) {
@@ -240,7 +282,7 @@ export const selectProductFromSearchResults = (
     }
   }
 
-  // 6. Ambiguous / Unresolved reference
+  // 7. Ambiguous / Unresolved reference
   return {
     success: false,
     code: "PRODUCT_REFERENCE_AMBIGUOUS",

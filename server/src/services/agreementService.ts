@@ -9,6 +9,7 @@ import { calculateEconomicOffer, roundMoney, roundPercent } from "./economicEngi
 import { evaluatePolicy } from "./policyEngine.js";
 import { createAuditEvent, getAuditEventsForAgreement } from "./auditService.js";
 import { createApprovalRequest } from "./approvalService.js";
+import { getCurrentPolicyForMerchant } from "./policyService.js";
 
 export interface ApproveAgreementResult {
   agreementId: string;
@@ -78,12 +79,20 @@ export const createAgreementFromNegotiation = async (
     throw new AppCustomError("INVALID_PRODUCT", "Product not found", 404);
   }
 
-  const policy = await Policy.findById(negotiation.policyId);
-  if (!policy) {
-    throw new AppCustomError("INVALID_POLICY", "Policy not found", 404);
-  }
+  const policy = await getCurrentPolicyForMerchant(negotiation.merchantId.toString());
 
   const agreedPrice = negotiation.acceptedPrice ?? negotiation.currentBuyerOffer ?? negotiation.originalUnitPrice;
+
+  console.log("[AGREEMENT_POLICY]", JSON.stringify({
+    merchantId: negotiation.merchantId.toString(),
+    policyId: policy._id.toString(),
+    maxDiscountPercent: policy.maxDiscountPercent,
+    minMarginPercent: policy.minMarginPercent,
+    autoApprovalLimit: policy.autoApprovalLimit,
+    productPrice: product.price,
+    costPrice: product.costPrice,
+    agreedPrice,
+  }));
 
   // 1. Revalidate Financials with Economic Engine
   const economicResult = calculateEconomicOffer({
@@ -393,22 +402,117 @@ export const rejectAgreement = async (
   };
 };
 
-export const getAgreementById = async (id: string): Promise<IAgreement> => {
+export const getAgreementById = async (id: string): Promise<any> => {
   if (!mongoose.Types.ObjectId.isValid(id)) {
     throw new AppCustomError("AGREEMENT_NOT_FOUND", "Invalid agreement ID format", 400);
   }
 
   const agreement = await Agreement.findById(id)
-    .populate("merchantId", "name businessName email")
-    .populate("productId", "name sku price costPrice")
-    .populate("policyId", "name maxDiscountPercent minMarginPercent autoApprovalLimit")
+    .populate("merchantId", "name businessName email currency")
+    .populate("productId", "name sku price costPrice imageUrl category deliveryDays isNegotiable")
+    .populate("policyId", "name maxDiscountPercent minMarginPercent autoApprovalLimit freeShippingThreshold")
     .populate("negotiationId");
 
   if (!agreement) {
     throw new AppCustomError("AGREEMENT_NOT_FOUND", "Agreement not found", 404);
   }
 
-  return agreement;
+  const approval = await Approval.findOne({ agreementId: agreement._id });
+  const auditEvents = await getAuditEventsForAgreement(id);
+  let paymentReady = false;
+  try {
+    const pr = await isPaymentReady(id);
+    paymentReady = pr.paymentReady;
+  } catch {
+    paymentReady = false;
+  }
+
+  const agObj = agreement.toObject ? agreement.toObject() : agreement;
+
+  return {
+    ...agObj,
+    approval,
+    auditEvents,
+    paymentReady,
+  };
+};
+
+export interface GetAgreementsQuery {
+  merchantId?: string;
+  status?: string;
+  search?: string;
+  page?: string | number;
+  limit?: string | number;
+}
+
+export const getAllAgreements = async (query: GetAgreementsQuery = {}) => {
+  const filter: any = {};
+
+  if (query.merchantId) {
+    if (!mongoose.Types.ObjectId.isValid(query.merchantId)) {
+      throw new AppCustomError("INVALID_MERCHANT", "Invalid merchant ID format", 400);
+    }
+    filter.merchantId = query.merchantId;
+  }
+
+  if (query.status) {
+    filter.status = query.status.toUpperCase();
+  }
+
+  if (query.search && query.search.trim()) {
+    const trimmed = query.search.trim();
+    const matchingProducts = await Product.find({
+      $or: [
+        { name: { $regex: trimmed, $options: "i" } },
+        { sku: { $regex: trimmed, $options: "i" } },
+      ],
+    }).distinct("_id");
+    filter.productId = { $in: matchingProducts };
+  }
+
+  const page = Math.max(1, parseInt(String(query.page || "1"), 10) || 1);
+  const limit = Math.min(
+    100,
+    Math.max(1, parseInt(String(query.limit || "20"), 10) || 20)
+  );
+  const skip = (page - 1) * limit;
+
+  const total = await Agreement.countDocuments(filter);
+  const totalPages = Math.ceil(total / limit) || 1;
+
+  const rawAgreements = await Agreement.find(filter)
+    .populate("merchantId", "name businessName email currency")
+    .populate("productId", "name sku price imageUrl category deliveryDays isNegotiable")
+    .populate("policyId", "name maxDiscountPercent minMarginPercent autoApprovalLimit freeShippingThreshold")
+    .populate("negotiationId")
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit);
+
+  const agreementIds = rawAgreements.map((a) => a._id);
+  const approvals = await Approval.find({ agreementId: { $in: agreementIds } });
+  const approvalMap = new Map(approvals.map((app) => [app.agreementId.toString(), app]));
+
+  const data = rawAgreements.map((ag) => {
+    const agObj = ag.toObject ? ag.toObject() : ag;
+    const approval = approvalMap.get(ag._id.toString()) || null;
+    const paymentReady = ag.status === "APPROVED";
+    return {
+      ...agObj,
+      approval,
+      paymentReady,
+    };
+  });
+
+  return {
+    data,
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages,
+    },
+  };
 };
 
 export const getAgreementExplanation = async (
@@ -498,6 +602,12 @@ export const isPaymentReady = async (
       "Agreement data is incomplete for payment processing",
       400
     );
+  }
+
+  // Pre-purchase stock validation: Verify product still has sufficient inventory
+  const product = await Product.findById(agreement.productId);
+  if (!product || product.inventory < agreement.quantity) {
+    return { paymentReady: false };
   }
 
   return { paymentReady: true };

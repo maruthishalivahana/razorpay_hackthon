@@ -1,4 +1,5 @@
-import { Router, type Request, type Response, type NextFunction } from "express";
+import { Router } from "express";
+import type { Request, Response, NextFunction } from "express";
 import {
   approveAgreementSchema,
   rejectAgreementSchema,
@@ -12,15 +13,26 @@ import {
   rejectAgreement,
 } from "../services/agreementService.js";
 
+import { requireAuth, requireRole, optionalAuth } from "../middleware/auth.js";
+import { AppCustomError } from "../services/negotiationService.js";
+
 const router = Router();
 
 // GET /api/approvals/agreement/:agreementId (MUST BE BEFORE /:id)
 router.get(
   "/agreement/:agreementId",
+  optionalAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const agreementId = String(req.params.agreementId);
       const approval = await getApprovalByAgreement(agreementId);
+
+      if (approval && req.user?.role === "MERCHANT" && req.user.merchantId) {
+        if (approval.merchantId.toString() !== req.user.merchantId) {
+          throw new AppCustomError("FORBIDDEN", "You don't have permission to access this resource.", 403);
+        }
+      }
+
       return res.status(200).json({
         success: true,
         data: approval,
@@ -34,10 +46,18 @@ router.get(
 // GET /api/approvals/:id
 router.get(
   "/:id",
+  optionalAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const id = String(req.params.id);
       const approval = await getApprovalById(id);
+
+      if (approval && req.user?.role === "MERCHANT" && req.user.merchantId) {
+        if (approval.merchantId.toString() !== req.user.merchantId) {
+          throw new AppCustomError("FORBIDDEN", "You don't have permission to access this resource.", 403);
+        }
+      }
+
       return res.status(200).json({
         success: true,
         data: approval,
@@ -48,15 +68,21 @@ router.get(
   }
 );
 
-// POST /api/approvals/:id/approve
+// POST /api/approvals/:id/approve (Requires MERCHANT role & approval ownership)
 router.post(
   "/:id/approve",
+  requireAuth,
+  requireRole("MERCHANT"),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const id = String(req.params.id);
       const { reviewer } = approveAgreementSchema.parse(req.body);
 
       const approval = await getApprovalById(id);
+      if (approval.merchantId.toString() !== req.user!.merchantId) {
+        throw new AppCustomError("FORBIDDEN", "You don't have permission to access this resource.", 403);
+      }
+
       const result = await approveAgreement(
         approval.agreementId.toString(),
         reviewer
@@ -72,15 +98,21 @@ router.post(
   }
 );
 
-// POST /api/approvals/:id/reject
+// POST /api/approvals/:id/reject (Requires MERCHANT role & approval ownership)
 router.post(
   "/:id/reject",
+  requireAuth,
+  requireRole("MERCHANT"),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const id = String(req.params.id);
       const { reviewer, reason } = rejectAgreementSchema.parse(req.body);
 
       const approval = await getApprovalById(id);
+      if (approval.merchantId.toString() !== req.user!.merchantId) {
+        throw new AppCustomError("FORBIDDEN", "You don't have permission to access this resource.", 403);
+      }
+
       const result = await rejectAgreement(
         approval.agreementId.toString(),
         reviewer,

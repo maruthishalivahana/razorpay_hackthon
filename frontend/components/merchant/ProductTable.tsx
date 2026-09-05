@@ -54,11 +54,17 @@ export function ProductTable({
                     <div className="flex items-center gap-3">
                       <div className="relative h-10 w-10 rounded-md bg-muted flex items-center justify-center overflow-hidden shrink-0 border border-border">
                         {product.imageUrl ? (
-                          <img
-                            src={product.imageUrl}
-                            alt={product.name}
-                            className="h-full w-full object-cover"
-                          />
+                          <>
+                            <img
+                              src={product.imageUrl}
+                              alt={product.name}
+                              className="h-full w-full object-cover"
+                              onError={(e) => {
+                                (e.currentTarget as HTMLImageElement).style.display = "none";
+                              }}
+                            />
+                            <Package className="h-5 w-5 text-muted-foreground -z-10 absolute" />
+                          </>
                         ) : (
                           <Package className="h-5 w-5 text-muted-foreground" />
                         )}
@@ -167,11 +173,17 @@ export function ProductTable({
                   <div className="flex items-center gap-3">
                     <div className="relative h-10 w-10 rounded-md bg-muted flex items-center justify-center overflow-hidden shrink-0 border border-border">
                       {product.imageUrl ? (
-                        <img
-                          src={product.imageUrl}
-                          alt={product.name}
-                          className="h-full w-full object-cover"
-                        />
+                        <>
+                          <img
+                            src={product.imageUrl}
+                            alt={product.name}
+                            className="h-full w-full object-cover"
+                            onError={(e) => {
+                              (e.currentTarget as HTMLImageElement).style.display = "none";
+                            }}
+                          />
+                          <Package className="h-5 w-5 text-muted-foreground -z-10 absolute" />
+                        </>
                       ) : (
                         <Package className="h-5 w-5 text-muted-foreground" />
                       )}

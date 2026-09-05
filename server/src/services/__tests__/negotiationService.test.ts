@@ -14,6 +14,7 @@ import {
   getNegotiationById,
   AppCustomError,
 } from "../negotiationService.js";
+import { createAgreementFromNegotiation } from "../agreementService.js";
 
 describe("Negotiation Engine Service Tests", () => {
   let merchant: IMerchant;
@@ -465,5 +466,41 @@ describe("Negotiation Engine Service Tests", () => {
     assert.equal(finalDoc.status, "ACCEPTED");
     assert.equal(finalDoc.acceptedPrice, 9000);
     assert.equal(finalDoc.finalOrderValue, 90000);
+  });
+
+  test("TEST 27: Updated merchant policy is used for an existing negotiation", async () => {
+    await Product.findByIdAndUpdate(product._id, {
+      price: 42999,
+      costPrice: 35000,
+    });
+
+    const neg = await startNegotiation({
+      merchantId: merchant._id.toString(),
+      productId: product._id.toString(),
+      policyId: policy._id.toString(),
+      quantity: 1,
+      currency: "INR",
+    });
+
+    await Policy.findByIdAndUpdate(policy._id, {
+      maxDiscountPercent: 20,
+      minMarginPercent: 1,
+      autoApprovalLimit: 50000,
+    });
+
+    const requestedPrice = 36549.15;
+    const offer = await submitBuyerOffer(neg._id.toString(), requestedPrice);
+
+    assert.equal(offer.decision, "ACCEPT");
+    assert.equal(offer.discountPercent, 15);
+    assert.equal(offer.marginPercent, 4.24);
+
+    const accepted = await acceptNegotiation(neg._id.toString());
+    const agreement = await createAgreementFromNegotiation(accepted._id.toString());
+
+    assert.equal(agreement.status, "APPROVED");
+    assert.equal(agreement.finalOrderValue, 36549.15);
+    assert.equal(agreement.discountPercent, 15);
+    assert.equal(agreement.marginPercent, 4.24);
   });
 });

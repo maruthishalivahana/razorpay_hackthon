@@ -15,6 +15,7 @@ import Agreement from "../models/Agreement.js";
 import { isPaymentReady } from "./agreementService.js";
 import type { BuyerState, BuyerIntent, CommerceQueryResult, CommerceQueryKind } from "../agents/buyerState.js";
 import { getProductById, toPublicProduct } from "./productService.js";
+import { getCurrentPolicyForMerchant } from "./policyService.js";
 
 export const resolveCommerceQuery = async (
   intent: BuyerIntent,
@@ -57,7 +58,7 @@ export const resolveCommerceQuery = async (
       try {
         const p = await getProductById(id);
         if (p) products.push(p);
-      } catch {}
+      } catch { }
     }
 
     if (query?.targetProductRef && typeof query.targetProductRef === "number") {
@@ -95,7 +96,7 @@ export const resolveCommerceQuery = async (
     const merchantIdStr = targetProduct.merchantId?._id
       ? targetProduct.merchantId._id.toString()
       : targetProduct.merchantId.toString();
-    policy = await Policy.findOne({ merchantId: merchantIdStr, isActive: true });
+    policy = await getCurrentPolicyForMerchant(merchantIdStr).catch(() => null);
   }
 
   // Fetch active Negotiation if present
@@ -103,7 +104,7 @@ export const resolveCommerceQuery = async (
   if (state.negotiationId) {
     try {
       negotiation = await Negotiation.findById(state.negotiationId);
-    } catch {}
+    } catch { }
   }
 
   // Fetch active Agreement if present
@@ -111,7 +112,7 @@ export const resolveCommerceQuery = async (
   if (state.agreementId) {
     try {
       agreement = await Agreement.findById(state.agreementId);
-    } catch {}
+    } catch { }
   }
 
   // ── Step 3: Resolve query by Kind ──

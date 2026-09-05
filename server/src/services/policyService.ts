@@ -63,15 +63,16 @@ export const getPolicyByMerchantId = async (
   return policy;
 };
 
+export const getCurrentPolicyForMerchant = async (
+  merchantId: string
+): Promise<IPolicy> => getPolicyByMerchantId(merchantId);
+
 export const getPolicyById = async (id: string): Promise<IPolicy> => {
   if (!mongoose.Types.ObjectId.isValid(id)) {
     throw new AppError("Invalid Policy ID format", 400);
   }
 
-  const policy = await Policy.findById(id).populate(
-    "merchantId",
-    "name businessName email"
-  );
+  const policy = await Policy.findById(id);
   if (!policy) {
     throw new AppError("Policy not found", 404);
   }

@@ -1,4 +1,5 @@
-import { Router, type Request, type Response, type NextFunction } from "express";
+import { Router } from "express";
+import type { Request, Response, NextFunction } from "express";
 import {
   createMerchantSchema,
   updateMerchantSchema,
@@ -10,6 +11,9 @@ import {
   updateMerchant,
   deleteMerchant,
 } from "../services/merchantService.js";
+
+import { requireAuth, requireRole, optionalAuth } from "../middleware/auth.js";
+import { AppCustomError } from "../services/negotiationService.js";
 
 const router = Router();
 
@@ -33,8 +37,17 @@ router.post(
 // GET /api/merchants
 router.get(
   "/",
-  async (_req: Request, res: Response, next: NextFunction) => {
+  optionalAuth,
+  async (req: Request, res: Response, next: NextFunction) => {
     try {
+      if (req.user?.role === "MERCHANT" && req.user.merchantId) {
+        const merchant = await getMerchantById(req.user.merchantId);
+        return res.status(200).json({
+          success: true,
+          data: [merchant],
+        });
+      }
+
       const merchants = await getAllMerchants();
       return res.status(200).json({
         success: true,
@@ -49,9 +62,16 @@ router.get(
 // GET /api/merchants/:id
 router.get(
   "/:id",
+  optionalAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const id = String(req.params.id);
+      if (req.user?.role === "MERCHANT" && req.user.merchantId) {
+        if (id !== req.user.merchantId) {
+          throw new AppCustomError("FORBIDDEN", "You don't have permission to access this resource.", 403);
+        }
+      }
+
       const merchant = await getMerchantById(id);
       return res.status(200).json({
         success: true,
@@ -63,12 +83,18 @@ router.get(
   }
 );
 
-// PUT /api/merchants/:id
+// PUT /api/merchants/:id (Requires MERCHANT role & merchant ownership)
 router.put(
   "/:id",
+  requireAuth,
+  requireRole("MERCHANT"),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const id = String(req.params.id);
+      if (id !== req.user!.merchantId) {
+        throw new AppCustomError("FORBIDDEN", "You don't have permission to access this resource.", 403);
+      }
+
       const validatedData = updateMerchantSchema.parse(req.body);
       const updatedMerchant = await updateMerchant(id, validatedData);
       return res.status(200).json({

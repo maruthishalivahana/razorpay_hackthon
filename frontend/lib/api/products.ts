@@ -1,5 +1,10 @@
 import { apiClient } from "./client";
-import type { Product, ProductsApiResponse, SingleProductApiResponse } from "@/types/product";
+import type {
+  Product,
+  ProductsApiResponse,
+  SingleProductApiResponse,
+  SpecificationValue,
+} from "@/types/product";
 
 export interface GetProductsParams {
   merchantId?: string;
@@ -8,6 +13,42 @@ export interface GetProductsParams {
   search?: string;
   page?: number;
   limit?: number;
+}
+
+/**
+ * Normalizes product data from API responses to ensure:
+ * - specifications is always a clean Record<string, SpecificationValue> (handling Mongoose Maps / plain objects)
+ * - tags is always a clean string[]
+ */
+export function normalizeProduct(
+  product: Partial<Product> | Record<string, unknown> | null | undefined
+): Product {
+  if (!product || typeof product !== "object") return product as unknown as Product;
+
+  let specifications: Record<string, SpecificationValue> | undefined = undefined;
+
+  const rawSpecs = product.specifications;
+  if (rawSpecs) {
+    if (rawSpecs instanceof Map) {
+      specifications = Object.fromEntries(rawSpecs.entries());
+    } else if (typeof rawSpecs === "object") {
+      specifications = { ...(rawSpecs as Record<string, SpecificationValue>) };
+    }
+  }
+
+  const rawObj = product as Record<string, unknown>;
+  const resolvedImageUrl =
+    (typeof rawObj.imageUrl === "string" && rawObj.imageUrl.trim()) ||
+    (typeof rawObj.image === "string" && rawObj.image.trim()) ||
+    undefined;
+
+  return {
+    ...(product as unknown as Product),
+    imageUrl: resolvedImageUrl,
+    image: resolvedImageUrl,
+    tags: Array.isArray(product.tags) ? (product.tags as string[]) : [],
+    specifications,
+  };
 }
 
 export async function fetchProducts(params?: GetProductsParams): Promise<ProductsApiResponse> {
@@ -21,19 +62,49 @@ export async function fetchProducts(params?: GetProductsParams): Promise<Product
 
   const queryString = searchParams.toString();
   const endpoint = `/api/products${queryString ? `?${queryString}` : ""}`;
-  return apiClient.get<ProductsApiResponse>(endpoint);
+  const response = await apiClient.get<ProductsApiResponse>(endpoint);
+
+  if (response && Array.isArray(response.data)) {
+    return {
+      ...response,
+      data: response.data.map(normalizeProduct),
+    };
+  }
+
+  return response;
 }
 
 export async function fetchProductById(id: string): Promise<SingleProductApiResponse> {
-  return apiClient.get<SingleProductApiResponse>(`/api/products/${id}`);
+  const response = await apiClient.get<SingleProductApiResponse>(`/api/products/${id}`);
+  if (response && response.data) {
+    return {
+      ...response,
+      data: normalizeProduct(response.data),
+    };
+  }
+  return response;
 }
 
 export async function createProduct(data: Partial<Product>): Promise<SingleProductApiResponse> {
-  return apiClient.post<SingleProductApiResponse>("/api/products", data);
+  const response = await apiClient.post<SingleProductApiResponse>("/api/products", data);
+  if (response && response.data) {
+    return {
+      ...response,
+      data: normalizeProduct(response.data),
+    };
+  }
+  return response;
 }
 
 export async function updateProduct(id: string, data: Partial<Product>): Promise<SingleProductApiResponse> {
-  return apiClient.put<SingleProductApiResponse>(`/api/products/${id}`, data);
+  const response = await apiClient.put<SingleProductApiResponse>(`/api/products/${id}`, data);
+  if (response && response.data) {
+    return {
+      ...response,
+      data: normalizeProduct(response.data),
+    };
+  }
+  return response;
 }
 
 export async function deleteProduct(id: string): Promise<SingleProductApiResponse> {

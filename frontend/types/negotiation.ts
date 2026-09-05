@@ -13,9 +13,11 @@ export interface PopulatedProduct {
   name: string;
   sku: string;
   price: number;
+  costPrice?: number;
   category?: string;
   imageUrl?: string;
   deliveryDays?: number;
+  isNegotiable?: boolean;
 }
 
 export interface PopulatedMerchant {
@@ -24,6 +26,7 @@ export interface PopulatedMerchant {
   name: string;
   businessName: string;
   email: string;
+  currency?: string;
 }
 
 export interface PopulatedPolicy {
@@ -34,6 +37,28 @@ export interface PopulatedPolicy {
   minMarginPercent: number;
   freeShippingThreshold: number;
   autoApprovalLimit: number;
+}
+
+export interface ConversationMessage {
+  role: "user" | "assistant" | "system" | "tool";
+  content: string;
+  createdAt: string | Date;
+}
+
+export interface ConversationInfo {
+  conversationId: string;
+  messages: ConversationMessage[];
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
+}
+
+export interface AuditEventInfo {
+  eventType: string;
+  actorType: string;
+  actorId?: string;
+  description: string;
+  data?: Record<string, unknown>;
+  createdAt: string | Date;
 }
 
 export interface Negotiation {
@@ -59,6 +84,9 @@ export interface Negotiation {
   createdAt: string;
   updatedAt: string;
   history?: NegotiationHistoryItem[];
+  conversation?: ConversationInfo | null;
+  auditEvents?: AuditEventInfo[];
+  freeDeliveryEligible?: boolean;
 }
 
 export interface NegotiationPagination {

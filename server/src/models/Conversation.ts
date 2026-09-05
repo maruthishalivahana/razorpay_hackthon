@@ -56,6 +56,7 @@ export type ConversationStatus = "active" | "expired" | "completed";
 
 export interface IConversation extends Document {
   conversationId: string;
+  buyerId?: Types.ObjectId | null;
   status: ConversationStatus;
   buyerState: IStoredBuyerState;
   messages: IConversationMessage[];
@@ -157,6 +158,12 @@ const conversationSchema = new Schema<IConversation>(
       required: true,
       unique: true,
       trim: true,
+      index: true,
+    },
+    buyerId: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
       index: true,
     },
     status: {

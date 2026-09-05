@@ -48,6 +48,7 @@ import {
   type SelectionResult,
 } from "./productResolver.js";
 import { resolveCommerceQuery } from "../services/commerceQueryResolver.js";
+import { getCurrentPolicyForMerchant } from "../services/policyService.js";
 import {
   buildCommercialResponseContext,
   validateCommercialResponseFacts,
@@ -83,6 +84,7 @@ export interface BuyerAgentResult {
     negotiationStatus: string | null;
     agreementId: string | null;
     agreementStatus: string | null;
+    buyerOffer?: number | null;
     discountPercent?: number | null;
     requestedFreeDelivery?: boolean | null;
   };
@@ -506,10 +508,15 @@ export const processBuyerAction = async (
     }
 
     const product = await Product.findById(negotiation.productId);
-    const policy = await Policy.findById(negotiation.policyId);
+    const policy = await getCurrentPolicyForMerchant(
+      (product?.merchantId || negotiation.merchantId).toString()
+    );
 
     if (!product || !policy) {
       throw new AppCustomError("INVALID_PRODUCT", "Product or policy no longer exists", 400);
+    }
+    if (policy._id.toString() !== negotiation.policyId.toString()) {
+      negotiation.policyId = policy._id;
     }
 
     const offerPrice = negotiation.currentMerchantOffer ?? negotiation.originalUnitPrice;
@@ -1037,6 +1044,18 @@ export const runBuyerAgent = async (
       provider
     );
     console.log("[BUYER_AGENT] Intent:", JSON.stringify(intent));
+    console.log(
+      `[INTENT_DEBUG]\n` +
+      `userMessage = ${message}\n` +
+      `rawIntent = ${JSON.stringify(intent)}\n` +
+      `normalizedIntent = ${intent.type}\n` +
+      `buyerOffer = ${intent.updates?.buyerOffer ?? null}\n` +
+      `selectedProductIndex = ${intent.updates?.selectedProductIndex ?? null}\n` +
+      `requestedFreeDelivery = ${intent.updates?.requestedFreeDelivery ?? null}\n` +
+      `currentConversationId = ${conversationId}\n` +
+      `selectedProductId = ${currentState.selectedProductId ?? null}\n` +
+      `negotiationId = ${currentState.negotiationId ?? null}`
+    );
 
     await addMessage(conversationId, "user", message!);
     history.push({ role: "user", content: message! });
@@ -1319,8 +1338,8 @@ export const runBuyerAgent = async (
         ? rawProduct.merchantId._id.toString()
         : rawProduct.merchantId.toString();
 
-      const policy = await Policy.findOne({ merchantId: merchantIdStr, isActive: true });
-      if (!policy || !policy.negotiationEnabled) {
+      const policy = await getCurrentPolicyForMerchant(merchantIdStr).catch(() => null);
+      if (!policy || !policy.isActive || !policy.negotiationEnabled) {
         const policyDisabledMsg = "Negotiation is disabled for this merchant.";
         await addMessage(conversationId, "assistant", policyDisabledMsg);
         await updateExpiration(conversationId);
@@ -1351,6 +1370,20 @@ export const runBuyerAgent = async (
       let activeNeg = await Negotiation.findById(negId);
       if (!activeNeg) {
         throw new AppCustomError("NEGOTIATION_NOT_FOUND", "Negotiation session not found", 404);
+      }
+
+      console.log("[BUYER_AGENT_POLICY]", JSON.stringify({
+        merchantId: merchantIdStr,
+        policyId: policy._id.toString(),
+        maxDiscountPercent: policy.maxDiscountPercent,
+        minMarginPercent: policy.minMarginPercent,
+        autoApprovalLimit: policy.autoApprovalLimit,
+      }));
+
+      // Sync active negotiation with latest merchant policy if updated
+      if (policy && activeNeg.policyId.toString() !== policy._id.toString()) {
+        activeNeg.policyId = policy._id;
+        await activeNeg.save();
       }
 
       // If quantity changed on active negotiation, update it
@@ -1469,7 +1502,7 @@ export const runBuyerAgent = async (
           intent.updates.selectedProductIndex !== undefined ||
           intent.updates.selectedProductReference !== undefined;
 
-        const currentPrice = activeNeg.currentMerchantOffer ?? activeNeg.originalUnitPrice ?? rawProduct.price;
+        const currentPrice = activeNeg?.currentMerchantOffer ?? activeNeg?.originalUnitPrice ?? rawProduct?.price ?? 0;
         const currentOrderVal = currentPrice * requestedQty;
         const isEligibleForShipping = policy && policy.freeShippingThreshold !== undefined && policy.freeShippingThreshold !== null
           ? (policy.freeShippingThreshold === 0 || currentOrderVal >= policy.freeShippingThreshold)
@@ -1543,7 +1576,7 @@ export const runBuyerAgent = async (
         updates: {
           selectedProductId: currentState.selectedProductId,
           selectedProductName: currentState.selectedProductName,
-          negotiationId: activeNeg._id.toString(),
+          negotiationId: activeNeg ? activeNeg._id.toString() : (currentState.negotiationId || null),
           negotiationStatus: finalStatus,
           quantity: requestedQty,
           buyerOffer: effectiveBuyerOffer ?? currentState.buyerOffer ?? null,
@@ -1897,6 +1930,7 @@ const publicSearchState = (state: BuyerState) => ({
   agreementId: state.agreementId || null,
   agreementStatus: state.agreementStatus || null,
   paymentReady: state.paymentReady ?? null,
+  buyerOffer: state.buyerOffer ?? null,
   discountPercent: state.discountPercent ?? null,
   requestedFreeDelivery: state.requestedFreeDelivery ?? null,
 });

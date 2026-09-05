@@ -1,6 +1,6 @@
 import mongoose, { Schema, Document } from "mongoose";
 
-export type AuditActorType = "BUYER" | "MERCHANT" | "SYSTEM" | "AGENT";
+export type AuditActorType = "BUYER" | "MERCHANT" | "SYSTEM" | "AGENT" | "PAYMENT_PROVIDER";
 
 export type AuditEventType =
   | "NEGOTIATION_STARTED"
@@ -17,13 +17,30 @@ export type AuditEventType =
   | "AGREEMENT_APPROVED"
   | "AGREEMENT_REJECTED"
   | "AGREEMENT_EXPIRED"
-  | "PAYMENT_READY";
+  | "PAYMENT_READY"
+  | "POLICY_EVALUATED"
+  | "POLICY_AUTO_APPROVED"
+  | "POLICY_BLOCKED"
+  | "INVENTORY_CHECKED"
+  | "INVENTORY_DEDUCTED"
+  | "INVENTORY_UNAVAILABLE"
+  | "PAYMENT_ORDER_CREATED"
+  | "PAYMENT_VERIFICATION_STARTED"
+  | "PAYMENT_VERIFIED"
+  | "PAYMENT_CAPTURED"
+  | "PAYMENT_FAILED"
+  | "ORDER_PLACED"
+  | "ORDER_FAILED"
+  | "NEGOTIATION_FAILED";
 
 export interface IAuditEvent extends Document {
   merchantId: mongoose.Types.ObjectId;
   negotiationId?: mongoose.Types.ObjectId;
   agreementId?: mongoose.Types.ObjectId;
   approvalId?: mongoose.Types.ObjectId;
+  orderId?: string;
+  paymentId?: string;
+  productId?: mongoose.Types.ObjectId;
   eventType: AuditEventType | string;
   actorType: AuditActorType;
   actorId?: string;
@@ -51,6 +68,9 @@ const auditEventSchema = new Schema<IAuditEvent>(
       type: Schema.Types.ObjectId,
       ref: "Approval",
     },
+    orderId: { type: String, trim: true },
+    paymentId: { type: String, trim: true },
+    productId: { type: Schema.Types.ObjectId, ref: "Product" },
     eventType: {
       type: String,
       required: true,
@@ -58,7 +78,7 @@ const auditEventSchema = new Schema<IAuditEvent>(
     },
     actorType: {
       type: String,
-      enum: ["BUYER", "MERCHANT", "SYSTEM", "AGENT"],
+      enum: ["BUYER", "MERCHANT", "SYSTEM", "AGENT", "PAYMENT_PROVIDER"],
       required: true,
     },
     actorId: {
@@ -88,6 +108,7 @@ const auditEventSchema = new Schema<IAuditEvent>(
 auditEventSchema.index({ merchantId: 1, createdAt: 1 });
 auditEventSchema.index({ agreementId: 1, createdAt: 1 });
 auditEventSchema.index({ negotiationId: 1, createdAt: 1 });
+auditEventSchema.index({ merchantId: 1, eventType: 1, createdAt: -1 });
 
 const AuditEvent = mongoose.model<IAuditEvent>("AuditEvent", auditEventSchema);
 

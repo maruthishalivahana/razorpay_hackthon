@@ -53,6 +53,8 @@ export interface PublicProduct {
   tags?: string[];
   imageUrl?: string;
   isNegotiable: boolean;
+  /** Structured attributes from the product's specifications map. */
+  specifications?: Record<string, string | number | boolean>;
 }
 
 export interface ProductSearchResult {
@@ -79,12 +81,134 @@ const escapeRegex = (str: string): string => {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 };
 
+// ─────────────────────────────────────────────────────────
+// CANONICAL ATTRIBUTE ALIAS MAP
+// Generic normalization — no category-specific or brand-specific logic.
+// Maps common synonym/variant forms to canonical attribute names.
+// Extend this map as the platform grows; do not add product-type-specific entries.
+// ─────────────────────────────────────────────────────────
+const ATTRIBUTE_ALIASES: Record<string, string> = {
+  colour: "color",
+  make: "brand",
+  manufacturer: "brand",
+  "brand name": "brand",
+  disk: "storage",
+  "ssd capacity": "storage",
+  "ssd storage": "storage",
+  hdd: "storage",
+  "hard disk": "storage",
+  "disk space": "storage",
+  "screen size": "screensize",
+  "display size": "screensize",
+};
+
+/**
+ * Normalize an attribute key to canonical form.
+ * Handles case, whitespace/separator variants, and synonym aliases generically.
+ * Works across ALL product categories — no category-specific logic.
+ *
+ * Examples:
+ *   "colour"          → "color"
+ *   "make"            → "brand"
+ *   "BRAND"           → "brand"
+ *   "adjustable-height" → "adjustableheight"
+ *   "SSD Capacity"    → "storage"
+ */
+export const normalizeAttributeKey = (key: string): string => {
+  const normalized = key
+    .replace(/[\s_-]+/g, " ")
+    .toLowerCase()
+    .trim();
+  const aliased = ATTRIBUTE_ALIASES[normalized];
+  if (aliased) return aliased;
+  // Remove spaces for compound/camelCase keys: "adjustable height" → "adjustableheight"
+  return normalized.replace(/\s+/g, "");
+};
+
+/**
+ * Look up a value from a product's specifications Map using normalized key matching.
+ * Tries canonical-normalized key first, then raw key (case-insensitive).
+ */
+const getSpecValue = (
+  specs: Map<string, string | number | boolean>,
+  normalizedKey: string,
+  rawKey: string
+): string | number | boolean | undefined => {
+  for (const [k, v] of specs.entries()) {
+    if (normalizeAttributeKey(k) === normalizedKey) return v;
+  }
+  const rawLower = rawKey.toLowerCase();
+  for (const [k, v] of specs.entries()) {
+    if (k.toLowerCase() === rawLower) return v;
+  }
+  return undefined;
+};
+
+/**
+ * Match a catalog specification value against a buyer requirement value.
+ * Supports:
+ *   - Booleans: true/yes/false/no
+ *   - Numbers: exact numeric equality
+ *   - Strings: case-insensitive, substring (handles multi-word values like "MacBook Pro")
+ * No type-specific or brand-specific handling.
+ */
+const matchesSpecValue = (
+  specValue: string | number | boolean,
+  reqValue: string | number | boolean
+): boolean => {
+  const reqStr = String(reqValue).toLowerCase().trim();
+
+  // Boolean requirement ("true", "yes", true)
+  if (reqValue === true || reqStr === "true" || reqStr === "yes") {
+    if (typeof specValue === "boolean") return specValue === true;
+    const sv = String(specValue).toLowerCase().trim();
+    return sv === "true" || sv === "yes";
+  }
+
+  // Exact numeric comparison
+  if (typeof reqValue === "number" && typeof specValue === "number") {
+    return specValue === reqValue;
+  }
+
+  // String: case-insensitive with substring support
+  // Supports multi-word values: "MacBook Pro", "video editing", "running shoes"
+  const specStr = String(specValue).toLowerCase().trim();
+  return specStr === reqStr || specStr.includes(reqStr) || reqStr.includes(specStr);
+};
+
+/**
+ * Legacy text fallback: check if a requirement is represented in the product's
+ * name, description, category, or tags as free text.
+ *
+ * Used ONLY when the product has no structured specification entry for that key.
+ * This preserves backward compatibility with products that pre-date the specifications field.
+ */
+const matchesTextFallback = (
+  fullText: string,
+  normalizedKey: string,
+  value: string | number | boolean
+): boolean => {
+  const reqStr = String(value).toLowerCase().trim();
+
+  if (value === true || reqStr === "true" || reqStr === "yes") {
+    // Boolean: check if the attribute key name appears in text
+    const readable = normalizedKey
+      .replace(/([a-z])([A-Z])/g, "$1 $2")
+      .toLowerCase();
+    return fullText.includes(readable);
+  }
+
+  // Value string check
+  return fullText.includes(reqStr);
+};
+
 export const toPublicProduct = (product: IProduct): PublicProduct => {
   let mId = "";
   if (product.merchantId) {
-    mId = typeof product.merchantId === "object" && (product.merchantId as any)._id
-      ? (product.merchantId as any)._id.toString()
-      : product.merchantId.toString();
+    mId =
+      typeof product.merchantId === "object" && (product.merchantId as any)._id
+        ? (product.merchantId as any)._id.toString()
+        : product.merchantId.toString();
   }
 
   return {
@@ -99,11 +223,19 @@ export const toPublicProduct = (product: IProduct): PublicProduct => {
     inventory: product.inventory,
     deliveryDays: product.deliveryDays,
     tags: product.tags,
-    imageUrl: product.imageUrl,
+    imageUrl: product.imageUrl || (product as any).image || undefined,
     isNegotiable: product.isNegotiable,
+    specifications: product.specifications
+      ? Object.fromEntries(product.specifications.entries())
+      : undefined,
   };
 };
 
+/**
+ * @deprecated Do not use as a production authorization allowlist.
+ * Kept only for backward compatibility with utility/unit tests.
+ * For production catalog capability detection use getDynamicSupportedKeys().
+ */
 export const SUPPORTED_HARD_REQUIREMENT_KEYS = new Set([
   "ergonomic",
   "ergonomics",
@@ -148,13 +280,57 @@ export interface CatalogCapabilities {
   searchableFields: string[];
 }
 
+/**
+ * Returns static catalog capabilities for utility/unit-test use.
+ * NOT used in the production search path.
+ * For production catalog capability detection, use getDynamicSupportedKeys().
+ */
 export const getCatalogCapabilities = (): CatalogCapabilities => {
   return {
     supportedHardKeys: SUPPORTED_HARD_REQUIREMENT_KEYS,
-    searchableFields: ["name", "description", "category", "tags"],
+    searchableFields: ["name", "description", "category", "tags", "specifications"],
   };
 };
 
+/**
+ * Dynamically detect which specification attribute keys exist in the current catalog.
+ * Returns canonical (normalized) key names found across active products' specifications.
+ *
+ * NO static allowlist — entirely driven by actual catalog data.
+ * Works for any category: Electronics, Fashion, Furniture, Groceries, etc.
+ *
+ * @param merchantId - Optional. Scope to a specific merchant's catalog.
+ */
+export const getDynamicSupportedKeys = async (
+  merchantId?: string
+): Promise<Set<string>> => {
+  const filter: any = { status: "active" };
+  if (merchantId && mongoose.Types.ObjectId.isValid(merchantId)) {
+    filter.merchantId = merchantId;
+  }
+
+  const products = await Product.find(filter, { specifications: 1 }).lean();
+  const keys = new Set<string>();
+
+  for (const product of products) {
+    const specs = (product as any).specifications;
+    if (specs && typeof specs === "object") {
+      for (const key of Object.keys(specs)) {
+        keys.add(normalizeAttributeKey(key));
+      }
+    }
+  }
+
+  return keys;
+};
+
+/**
+ * Utility: validate and classify requirements against a static capabilities set.
+ *
+ * NOTE: This function is NOT called in the production search path.
+ * searchProducts() uses dynamic spec-first matching instead.
+ * This function is kept for utility/test use only.
+ */
 export const validateCatalogRequirements = (
   rawHard: Record<string, any> = {},
   rawSoft: Record<string, any> = {},
@@ -225,13 +401,15 @@ export const searchProducts = async (
     minInventory,
     quantity,
     merchantId,
-    requirements,
     limit: rawLimit,
     sortBy = "relevance",
   } = params;
 
-  // Validation
-  if (minPrice !== undefined && (typeof minPrice !== "number" || minPrice < 0 || isNaN(minPrice))) {
+  // ── Validation ──────────────────────────────────────────
+  if (
+    minPrice !== undefined &&
+    (typeof minPrice !== "number" || minPrice < 0 || isNaN(minPrice))
+  ) {
     throw new AppCustomError(
       "INVALID_SEARCH_PARAMS",
       "minPrice must be a non-negative number.",
@@ -239,7 +417,10 @@ export const searchProducts = async (
     );
   }
 
-  if (maxPrice !== undefined && (typeof maxPrice !== "number" || maxPrice < 0 || isNaN(maxPrice))) {
+  if (
+    maxPrice !== undefined &&
+    (typeof maxPrice !== "number" || maxPrice < 0 || isNaN(maxPrice))
+  ) {
     throw new AppCustomError(
       "INVALID_SEARCH_PARAMS",
       "maxPrice must be a non-negative number.",
@@ -280,6 +461,7 @@ export const searchProducts = async (
     );
   }
 
+  // ── MongoDB filter construction ──────────────────────────
   const filter: any = { status: "active" };
 
   if (merchantId) {
@@ -303,17 +485,27 @@ export const searchProducts = async (
   filter.inventory = { $gte: requiredInventory };
 
   const tokenize = (str: string): string[] => {
-    return str.trim().toLowerCase().split(/\s+/).filter(Boolean).map(t => {
-      if (/(?:ss|is|us|as|os|yes|this|glass|dress|business|less|mass|boss|cross|furniture)$/i.test(t)) return t;
-      if (t.length > 3 && t.endsWith("s")) return t.slice(0, -1);
-      return t;
-    });
+    return str
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((t) => {
+        if (
+          /(?:ss|is|us|as|os|yes|this|glass|dress|business|less|mass|boss|cross|furniture)$/i.test(
+            t
+          )
+        )
+          return t;
+        if (t.length > 3 && t.endsWith("s")) return t.slice(0, -1);
+        return t;
+      });
   };
 
   if (query && query.trim().length > 0) {
     const tokens = tokenize(query);
     if (tokens.length > 0) {
-      filter.$and = tokens.map(token => {
+      filter.$and = tokens.map((token) => {
         const tRegex = new RegExp(escapeRegex(token), "i");
         return {
           $or: [
@@ -321,59 +513,86 @@ export const searchProducts = async (
             { description: tRegex },
             { category: tRegex },
             { tags: tRegex },
-          ]
+          ],
         };
       });
     }
   }
 
-  // Fetch candidates from MongoDB
+  // ── Fetch candidates ─────────────────────────────────────
   console.log("Searching MongoDB with filter:", JSON.stringify(filter));
   let rawProducts = await Product.find(filter);
   console.log("MongoDB returned items:", rawProducts.length);
 
-  // Requirements classification via Catalog Capabilities
+  // ─────────────────────────────────────────────────────────
+  // HARD REQUIREMENT FILTERING
+  // Generic, data-driven matching — no category/brand-specific logic.
+  //
+  // Architecture (per requirement key):
+  //   1. Structural specification match (primary, definitive)
+  //      If product.specifications has the key → match value structurally.
+  //      If spec exists but value mismatches → product EXCLUDED (no fallback).
+  //   2. Legacy text fallback
+  //      If product has NO spec entry for this key →
+  //      check name + description + category + tags for the value.
+  //      This preserves backward compat with pre-specifications products.
+  //
+  // Key normalization is applied generically (colour→color, make→brand, etc.)
+  // ─────────────────────────────────────────────────────────
   const rawHardInput = params.hardRequirements || params.requirements || {};
-  const rawSoftInput = params.softPreferences || params.preferences || {};
-  const { hardRequirements: validatedHard, softPreferences: validatedSoft } = validateCatalogRequirements(rawHardInput, rawSoftInput);
+  const hardEntries = Object.entries(rawHardInput);
 
-  // Requirements filtering (ONLY supported hard requirements filter rawProducts)
-  const hardEntries = Object.entries(validatedHard);
   if (hardEntries.length > 0) {
     rawProducts = rawProducts.filter((p) => {
-      const fullText = `${p.name} ${p.description} ${(p.tags || []).join(" ")}`.toLowerCase();
-      return hardEntries.every(([key, value]) => {
+      const specMap = p.specifications;
+      const fullText =
+        `${p.name} ${p.description} ${p.category} ${(p.tags || []).join(" ")}`.toLowerCase();
+
+      return hardEntries.every(([rawKey, value]) => {
+        // false means "must NOT have" — skip (not yet a use-case)
         if (value === false) return true;
-        if (value === true || String(value).toLowerCase() === "true" || String(value).toLowerCase() === "yes") {
-          const readableKey = key.replace(/([A-Z])/g, " $1").trim().toLowerCase();
-          return fullText.includes(readableKey);
-        } else {
-          const strVal = String(value).toLowerCase();
-          return fullText.includes(strVal);
+
+        const normalizedKey = normalizeAttributeKey(rawKey);
+
+        // 1. Structural specification match (primary)
+        if (specMap && specMap.size > 0) {
+          const specValue = getSpecValue(specMap, normalizedKey, rawKey);
+          if (specValue !== undefined) {
+            // Spec found → definitive answer from spec only
+            // A spec mismatch cannot be rescued by text fallback
+            return matchesSpecValue(specValue, value);
+          }
         }
+
+        // 2. Legacy text fallback (product predates structured specifications)
+        return matchesTextFallback(fullText, normalizedKey, value);
       });
     });
   }
 
   const total = rawProducts.length;
 
-  // Sorting
+  // ── Sorting & relevance ranking ──────────────────────────
   if (sortBy === "price_asc") {
     rawProducts.sort((a, b) => a.price - b.price);
   } else if (sortBy === "price_desc") {
     rawProducts.sort((a, b) => b.price - a.price);
   } else {
     // Relevance scoring
-    const queryTokens = query ? tokenize(query) : [];
     const catStr = (category || "").trim().toLowerCase();
     const exactQuery = (query || "").trim().toLowerCase();
+    const softEntries = Object.entries(
+      params.softPreferences || params.preferences || {}
+    );
 
     const scored = rawProducts.map((p) => {
       let score = 0;
       const nameLower = p.name.toLowerCase();
       const descLower = p.description.toLowerCase();
       const catLower = p.category.toLowerCase();
+      const specMap = p.specifications;
 
+      // Query match scoring
       if (exactQuery) {
         if (nameLower === exactQuery) score += 100;
         else if (nameLower.includes(exactQuery)) score += 50;
@@ -381,24 +600,48 @@ export const searchProducts = async (
         if (descLower.includes(exactQuery)) score += 10;
       }
 
+      // Category match scoring
       if (catStr && catLower.includes(catStr)) {
         score += 40;
       }
 
+      // Inventory presence
       if (p.inventory > 0) score += 5;
 
-      // Soft preference relevance boost
-      const softEntries = Object.entries(validatedSoft);
+      // ── Soft preference relevance boost ──────────────────
+      // Spec-first: full boost when structured spec matches.
+      // Text fallback: partial boost when value appears in text.
+      // Neither filters out products — soft prefs only influence ranking.
       if (softEntries.length > 0) {
-        const fullText = `${p.name} ${p.description} ${(p.tags || []).join(" ")}`.toLowerCase();
-        for (const [sKey, sVal] of softEntries) {
+        const textForSoft =
+          `${p.name} ${p.description} ${(p.tags || []).join(" ")}`.toLowerCase();
+
+        for (const [rawKey, sVal] of softEntries) {
           if (sVal === false) continue;
-          const keyTerms = sKey.replace(/([A-Z])/g, " $1").trim().toLowerCase().split(/\s+/);
-          const valTerms = typeof sVal === "string" ? sVal.toLowerCase().split(/\s+/) : [];
+          const normalizedKey = normalizeAttributeKey(rawKey);
+
+          // Spec match: full boost
+          if (specMap && specMap.size > 0) {
+            const specValue = getSpecValue(specMap, normalizedKey, rawKey);
+            if (specValue !== undefined) {
+              if (matchesSpecValue(specValue, sVal)) score += 15;
+              // Don't also check text if a spec entry exists for this key
+              continue;
+            }
+          }
+
+          // Text fallback boost (legacy products)
+          const keyTerms = rawKey
+            .replace(/([A-Z])/g, " $1")
+            .trim()
+            .toLowerCase()
+            .split(/\s+/);
+          const valTerms =
+            typeof sVal === "string" ? sVal.toLowerCase().split(/\s+/) : [];
           const terms = [...keyTerms, ...valTerms].filter((t) => t.length > 2);
           for (const term of terms) {
-            if (fullText.includes(term)) {
-              score += 15;
+            if (textForSoft.includes(term)) {
+              score += 10;
               break;
             }
           }
@@ -407,10 +650,13 @@ export const searchProducts = async (
 
       return { product: p, score };
     });
-    
-    console.log("Scores computed. Sorting...", scored.length);
 
-    scored.sort((a, b) => b.score - a.score || b.product.createdAt.getTime() - a.product.createdAt.getTime());
+    console.log("Scores computed. Sorting...", scored.length);
+    scored.sort(
+      (a, b) =>
+        b.score - a.score ||
+        b.product.createdAt.getTime() - a.product.createdAt.getTime()
+    );
     rawProducts = scored.map((s) => s.product);
     console.log("Sorted");
   }
@@ -430,18 +676,16 @@ export const searchProducts = async (
       minInventory,
       quantity,
       merchantId,
-      requirements: validatedHard,
-      hardRequirements: validatedHard,
-      softPreferences: validatedSoft,
+      requirements: rawHardInput,
+      hardRequirements: rawHardInput,
+      softPreferences: params.softPreferences || params.preferences || {},
       limit,
       sortBy,
     },
   };
 };
 
-export const createProduct = async (
-  data: Partial<IProduct>
-): Promise<IProduct> => {
+export const createProduct = async (data: Partial<IProduct>): Promise<IProduct> => {
   if (!data.merchantId || !mongoose.Types.ObjectId.isValid(data.merchantId.toString())) {
     throw new AppError("Invalid or missing merchantId", 400);
   }
@@ -456,6 +700,12 @@ export const createProduct = async (
     if (existingSku) {
       throw new AppError("Product with this SKU already exists", 409);
     }
+  }
+
+  if ((data as any).image && !data.imageUrl) {
+    data.imageUrl = (data as any).image;
+  } else if (data.imageUrl && !(data as any).image) {
+    (data as any).image = data.imageUrl;
   }
 
   try {
@@ -543,19 +793,13 @@ export const updateProduct = async (
     throw new AppError("Invalid Product ID format", 400);
   }
 
-  if (data.merchantId) {
-    if (!mongoose.Types.ObjectId.isValid(data.merchantId.toString())) {
-      throw new AppError("Invalid Merchant ID format", 400);
-    }
-    const merchantExists = await Merchant.exists({ _id: data.merchantId });
-    if (!merchantExists) {
-      throw new AppError("Merchant not found", 404);
-    }
-  }
+  const { merchantId: _ignoredMerchantId, ...safeData } = data as Partial<IProduct> & {
+    merchantId?: unknown;
+  };
 
-  if (data.sku) {
+  if (safeData.sku) {
     const existingSku = await Product.findOne({
-      sku: data.sku.toUpperCase(),
+      sku: safeData.sku.toUpperCase(),
       _id: { $ne: id },
     });
     if (existingSku) {
@@ -563,8 +807,14 @@ export const updateProduct = async (
     }
   }
 
+  if ((safeData as any).image !== undefined && safeData.imageUrl === undefined) {
+    safeData.imageUrl = (safeData as any).image;
+  } else if (safeData.imageUrl !== undefined && (safeData as any).image === undefined) {
+    (safeData as any).image = safeData.imageUrl;
+  }
+
   try {
-    const updated = await Product.findByIdAndUpdate(id, data, {
+    const updated = await Product.findByIdAndUpdate(id, safeData, {
       new: true,
       runValidators: true,
     });

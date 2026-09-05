@@ -8,7 +8,7 @@ import {
   type ProductSearchResult,
 } from "../../services/productService.js";
 
-export interface SearchProductsToolInput extends ProductSearchParams {}
+export interface SearchProductsToolInput extends ProductSearchParams { }
 
 export interface SearchProductsToolOutput {
   success: boolean;
@@ -138,7 +138,7 @@ import {
 } from "../../services/negotiationService.js";
 import { calculateEconomicOffer, roundPercent } from "../../services/economicEngine.js";
 import { createAuditEvent } from "../../services/auditService.js";
-import Policy from "../../models/Policy.js";
+import { getCurrentPolicyForMerchant } from "../../services/policyService.js";
 
 export interface StartNegotiationToolInput {
   productId: string;
@@ -208,8 +208,13 @@ export const startNegotiationTool = async (
     ? rawProduct.merchantId._id.toString()
     : rawProduct.merchantId.toString();
 
-  const policy = await Policy.findOne({ merchantId: merchantIdStr, isActive: true });
-  if (!policy || !policy.negotiationEnabled) {
+  let policy;
+  try {
+    policy = await getCurrentPolicyForMerchant(merchantIdStr);
+  } catch {
+    policy = null;
+  }
+  if (!policy || !policy.isActive || !policy.negotiationEnabled) {
     throw new AppCustomError("NEGOTIATION_NOT_AVAILABLE", "Negotiation is disabled for this merchant.", 400);
   }
 

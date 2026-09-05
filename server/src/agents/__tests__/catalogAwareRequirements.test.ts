@@ -7,7 +7,12 @@ import Product from "../../models/Product.js";
 import Policy from "../../models/Policy.js";
 import Conversation from "../../models/Conversation.js";
 import { runBuyerAgent } from "../buyerAgent.js";
-import { searchProducts, validateCatalogRequirements, getCatalogCapabilities } from "../../services/productService.js";
+import {
+  searchProducts,
+  validateCatalogRequirements,
+  getCatalogCapabilities,
+  getDynamicSupportedKeys,
+} from "../../services/productService.js";
 import { storedStateToBuyerState, getConversation } from "../../services/conversationService.js";
 import { mergeIntent, createEmptyState } from "../buyerState.js";
 import { sanitizeIntent, localFallbackIntent } from "../intentNormalizer.js";
@@ -83,6 +88,15 @@ describe("Catalog-Aware Requirements & Soft Preferences Tests", () => {
         inventory: 10,
         status: "active",
         tags: ["office", "chair", "ergonomic", "adjustable"],
+        // Structured specifications — generic, furniture-category agnostic
+        specifications: new Map<string, any>([
+          ["ergonomic", true],
+          ["adjustableHeight", true],
+          ["lumbarSupport", true],
+          ["comfortable", true],
+          ["material", "mesh"],
+          ["useCase", "working from home"],
+        ]),
       },
       {
         merchantId: merchant._id,
@@ -96,6 +110,13 @@ describe("Catalog-Aware Requirements & Soft Preferences Tests", () => {
         inventory: 8,
         status: "active",
         tags: ["laptop", "16gb", "512gb", "coding"],
+        // Structured specifications — generic, electronics-category agnostic
+        specifications: new Map<string, any>([
+          ["ram", "16GB"],
+          ["storage", "512GB"],
+          ["brand", "DevBook"],
+          ["lightweight", true],
+        ]),
       },
       {
         merchantId: merchant._id,
@@ -109,6 +130,12 @@ describe("Catalog-Aware Requirements & Soft Preferences Tests", () => {
         inventory: 12,
         status: "active",
         tags: ["shoes", "running", "size 9", "black"],
+        // Structured specifications — generic, fashion-category agnostic
+        specifications: new Map<string, any>([
+          ["size", "9"],
+          ["color", "black"],
+          ["brand", "ProRunner"],
+        ]),
       },
       {
         merchantId: merchant._id,
@@ -122,19 +149,25 @@ describe("Catalog-Aware Requirements & Soft Preferences Tests", () => {
         inventory: 5,
         status: "active",
         tags: ["phone", "256gb", "camera"],
+        // Structured specifications — generic, electronics-category agnostic
+        specifications: new Map<string, any>([
+          ["storage", "256GB"],
+          ["brand", "SmartX"],
+          ["cameraQuality", true],
+        ]),
       },
     ]);
   });
 
-  // 1. Supported hard requirement
-  test("1. Supported hard requirement is catalog-validated as hard", () => {
+  // 1. Supported hard requirement (utility function test)
+  test("1. Supported hard requirement is catalog-validated as hard (utility)", () => {
     const validated = validateCatalogRequirements({ ram: "16GB" }, {});
     assert.equal(validated.hardRequirements.ram, "16GB");
     assert.equal(validated.softPreferences.ram, undefined);
   });
 
-  // 2. Unsupported preference
-  test("2. Unsupported preference is classified as soft preference", () => {
+  // 2. Unsupported preference (utility function test)
+  test("2. Unsupported preference is classified as soft preference (utility)", () => {
     const validated = validateCatalogRequirements({ comfortable: true }, {});
     assert.equal(validated.hardRequirements.comfortable, undefined);
     assert.equal(validated.softPreferences.comfortable, true);
@@ -239,8 +272,8 @@ describe("Catalog-Aware Requirements & Soft Preferences Tests", () => {
     assert.equal(state2.hardRequirements.color, undefined);
   });
 
-  // 12. Unsupported requirement does not filter
-  test("12. Unsupported requirement does not eliminate products in searchProducts", async () => {
+  // 12. Hard requirement + soft preference search
+  test("12. Supported hard requirement + soft preference returns correct products", async () => {
     const res = await searchProducts({
       merchantId: merchant._id.toString(),
       query: "office chair",
@@ -248,20 +281,22 @@ describe("Catalog-Aware Requirements & Soft Preferences Tests", () => {
       softPreferences: { comfortable: true, useCase: "working from home" },
     });
     assert.ok(res.returned > 0);
+    // All returned products must have ergonomic=true in specs
+    assert.ok(res.products.every(p => p.specifications?.ergonomic === true));
   });
 
-  // 13. Zero results caused by hard requirement
-  test("13. Hard supported requirement causes zero results if non-matching", async () => {
+  // 13. Zero results caused by hard requirement mismatch
+  test("13. Hard requirement causes zero results if catalog has no matching spec value", async () => {
     const res = await searchProducts({
       merchantId: merchant._id.toString(),
       query: "office chair",
-      hardRequirements: { ram: "128GB" }, // Non-matching hard requirement
+      hardRequirements: { ram: "128GB" }, // Laptop-spec on a chair — not in chair's specs
     });
     assert.equal(res.returned, 0);
   });
 
-  // 14. Zero results NOT caused by unsupported preference
-  test("14. Unsupported preference alone does not produce zero results", async () => {
+  // 14. Soft preference alone does not produce zero results
+  test("14. Soft preference alone does not filter out products", async () => {
     const res = await searchProducts({
       merchantId: merchant._id.toString(),
       query: "office chair",
@@ -270,16 +305,22 @@ describe("Catalog-Aware Requirements & Soft Preferences Tests", () => {
     assert.ok(res.returned > 0);
   });
 
-  // 15. Multi-product-category behavior
-  test("15. System classifies requirements product-agnostically across categories", () => {
-    const caps = getCatalogCapabilities();
-    assert.ok(caps.supportedHardKeys.has("ram"));
-    assert.ok(caps.supportedHardKeys.has("size"));
-    assert.ok(caps.supportedHardKeys.has("ergonomic"));
-    assert.ok(caps.supportedHardKeys.has("storage"));
+  // 15. Dynamic catalog capability detection — no static allowlist
+  test("15. getDynamicSupportedKeys detects spec keys from actual catalog (no static list)", async () => {
+    const keys = await getDynamicSupportedKeys(merchant._id.toString());
+    // Keys present because the test fixture products have these in their specifications
+    assert.ok(keys.has("ram"));         // DevBook Pro Laptop specs
+    assert.ok(keys.has("size"));        // Pro Runner Shoes specs
+    assert.ok(keys.has("ergonomic"));   // Ergonomic Office Chair specs
+    assert.ok(keys.has("storage"));     // Smartphone X and DevBook specs
+    assert.ok(keys.has("color"));       // Pro Runner Shoes specs
+    assert.ok(keys.has("brand"));       // Multiple products
+    // Keys NOT present confirm the catalog is truly dynamic (no static additions)
+    assert.ok(!keys.has("flyingCapability"));
+    assert.ok(!keys.has("invisibilityCloak"));
   });
 
-  // 16. Laptop example regression
+  // 16. Laptop example regression — generic spec matching
   test("16. Laptop example: 16GB RAM is hard, coding & lightweight are soft", () => {
     const intent = localFallbackIntent("I need a laptop for coding, 16GB RAM, preferably lightweight, under 60000", createEmptyState());
     assert.equal(intent.updates.topic, "laptop");
@@ -289,7 +330,7 @@ describe("Catalog-Aware Requirements & Soft Preferences Tests", () => {
     assert.equal(intent.updates.softPreferences?.lightweight, true);
   });
 
-  // 17. Shoes example regression
+  // 17. Shoes example regression — generic spec matching
   test("17. Shoes example: size 9 is hard, black is soft", () => {
     const intent = localFallbackIntent("Running shoes size 9, black if possible, below 5000", createEmptyState());
     assert.equal(intent.updates.topic, "running shoe");
@@ -298,7 +339,7 @@ describe("Catalog-Aware Requirements & Soft Preferences Tests", () => {
     assert.equal(intent.updates.softPreferences?.color, "black");
   });
 
-  // 18. Phone example regression
+  // 18. Phone example regression — generic spec matching
   test("18. Phone example: 256GB storage is hard, good camera is soft", () => {
     const intent = localFallbackIntent("Give me a phone with 256GB storage, good camera would be nice", createEmptyState());
     assert.equal(intent.updates.topic, "phone");
@@ -315,8 +356,12 @@ describe("Catalog-Aware Requirements & Soft Preferences Tests", () => {
 
     const doc = await getConversation(res.conversationId);
     assert.ok(doc);
-    const hardReqs = (doc.buyerState.hardRequirements as any)?.get ? (doc.buyerState.hardRequirements as any).get("ergonomic") : (doc.buyerState.hardRequirements as any)?.ergonomic;
-    const softPrefs = (doc.buyerState.softPreferences as any)?.get ? (doc.buyerState.softPreferences as any).get("useCase") : (doc.buyerState.softPreferences as any)?.useCase;
+    const hardReqs = (doc.buyerState.hardRequirements as any)?.get
+      ? (doc.buyerState.hardRequirements as any).get("ergonomic")
+      : (doc.buyerState.hardRequirements as any)?.ergonomic;
+    const softPrefs = (doc.buyerState.softPreferences as any)?.get
+      ? (doc.buyerState.softPreferences as any).get("useCase")
+      : (doc.buyerState.softPreferences as any)?.useCase;
     assert.equal(hardReqs, true);
     assert.equal(softPrefs, "working from home");
   });
@@ -386,7 +431,7 @@ describe("Catalog-Aware Requirements & Soft Preferences Tests", () => {
   });
 
   // 24. No fabricated catalog attributes
-  test("24. System does not fabricate unsupported attributes into hard MongoDB filters", () => {
+  test("24. System does not fabricate unsupported attributes into hard MongoDB filters (utility)", () => {
     const validated = validateCatalogRequirements({ comfortLevel: 10, luxuryFeeling: "high" });
     assert.equal(validated.hardRequirements.comfortLevel, undefined);
     assert.equal(validated.hardRequirements.luxuryFeeling, undefined);
@@ -394,8 +439,8 @@ describe("Catalog-Aware Requirements & Soft Preferences Tests", () => {
     assert.equal(validated.softPreferences.luxuryFeeling, "high");
   });
 
-  // 25. LLM suggesting unsupported field is downgraded safely
-  test("25. LLM intent attempting to inject unsupported hard requirement is downgraded safely", () => {
+  // 25. Hard requirements pass through — dynamic catalog evaluation at search time
+  test("25. Hard requirements pass through sanitizeIntent for dynamic catalog evaluation at search time", () => {
     const sanitized = sanitizeIntent({
       type: "NEW_SEARCH",
       updates: {
@@ -409,7 +454,10 @@ describe("Catalog-Aware Requirements & Soft Preferences Tests", () => {
 
     assert.ok(sanitized);
     assert.equal(sanitized.updates.hardRequirements?.ergonomic, true);
-    assert.equal(sanitized.updates.hardRequirements?.fakeLLMField, undefined);
-    assert.equal(sanitized.updates.softPreferences?.fakeLLMField, "unsupportedValue");
+    // With dynamic capabilities, hard requirements are NOT downgraded by a static list.
+    // The search engine evaluates them against actual catalog specs at query time.
+    // fakeLLMField will simply find no matching products (no spec, no text match → excluded).
+    assert.equal(sanitized.updates.hardRequirements?.fakeLLMField, "unsupportedValue");
+    assert.equal(sanitized.updates.softPreferences?.fakeLLMField, undefined);
   });
 });

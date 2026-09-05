@@ -2,7 +2,6 @@ import type { BuyerState, BuyerIntent, IntentType, CommerceQueryKind } from "./b
 import type { ConversationTurn } from "./buyerAgent.js";
 import type { LLMProvider } from "../llm/llmProvider.js";
 import { parseOrdinalIndex } from "./productResolver.js";
-import { validateCatalogRequirements } from "../services/productService.js";
 
 const validIntentTypes: IntentType[] = [
   "NEW_SEARCH",
@@ -38,6 +37,7 @@ const allowedUpdateKeys = new Set([
   "negotiationId",
   "negotiationStatus",
   "buyerOffer",
+  "discountPercent",
   "requestedFreeDelivery",
   "query",
 ]);
@@ -61,12 +61,27 @@ const allowedClearFields = new Set([
 ]);
 
 export const buildIntentSystemInstruction = (): string => `
-You are an intent extraction engine for a product discovery commerce platform.
-Your job is to analyse the buyer's latest message in context of the session state and produce a JSON intent object.
+You are an intent extraction engine for an agentic e-commerce buyer platform.
+Your job is to analyze the buyer's latest message in context of the session state and conversation history, and produce a JSON intent object matching the canonical intent vocabulary.
+
+CANONICAL INTENT TYPES:
+- NEW_SEARCH: Buyer wants to search for a new product topic or start a fresh search.
+- UPDATE_SEARCH: Buyer updates search filters (price limit, quantity, sorting, requirements/specifications).
+- SELECT_PRODUCT: Buyer picks or references a specific product from search results (by index, name, ordinal, or relative position).
+- PRODUCT_DETAILS: Buyer asks for details/specifications of a product.
+- START_NEGOTIATION: Buyer initiates price negotiation on a selected product.
+- CONTINUE_NEGOTIATION: Buyer asks to continue negotiating or improve an offer without specifying a new numeric price ("can you do better?", "can you come down a bit?", "is that your best price?").
+- BUYER_OFFER: Buyer proposes a target price, discount percentage, or combined proposal ("would you take 18k?", "I can pay 18000", "18k with free delivery").
+- REQUEST_FREE_DELIVERY: Buyer requests/asks to include free shipping/delivery or waive delivery fees ("could you waive the delivery fee?", "can you cover shipping?", "make delivery free").
+- ACCEPT_NEGOTIATION: Buyer explicitly accepts a negotiated offer ("I accept", "that works", "deal").
+- PLACE_ORDER: Buyer requests to place the order, proceed to checkout, or complete purchase ("please order it", "go ahead", "let's buy it", "complete the order").
+- COMMERCE_QUERY: Buyer asks a question about existing delivery terms, product price, stock, order status, policy, or negotiability ("Does shipping come free?", "Is delivery included?", "What's the price?").
+- CLARIFICATION_REQUIRED: Message is ambiguous and system needs clarification.
+- OUT_OF_SCOPE: Off-topic or non-commerce message.
 
 Output ONLY valid JSON matching this schema:
 {
-  "type": "NEW_SEARCH" | "UPDATE_SEARCH" | "SELECT_PRODUCT" | "PRODUCT_DETAILS" | "START_NEGOTIATION" | "CONTINUE_NEGOTIATION" | "CLARIFICATION_REQUIRED" | "OUT_OF_SCOPE",
+  "type": "NEW_SEARCH" | "UPDATE_SEARCH" | "SELECT_PRODUCT" | "PRODUCT_DETAILS" | "START_NEGOTIATION" | "CONTINUE_NEGOTIATION" | "BUYER_OFFER" | "ACCEPT_NEGOTIATION" | "REQUEST_FREE_DELIVERY" | "PLACE_ORDER" | "COMMERCE_QUERY" | "CLARIFICATION_REQUIRED" | "OUT_OF_SCOPE",
   "updates": {
     "topic": string | null,
     "category": string | null,
@@ -77,7 +92,14 @@ Output ONLY valid JSON matching this schema:
     "requirements": Record<string, string | number | boolean>,
     "selectedProductIndex": number | null,
     "selectedProductReference": string | null,
-    "buyerOffer": number | null
+    "buyerOffer": number | null,
+    "discountPercent": number | null,
+    "requestedFreeDelivery": boolean | null,
+    "query": {
+      "kind": string,
+      "subject": string,
+      "targetProductRef": string | number
+    } | null
   },
   "clearFields": string[],
   "clarificationQuestion": string | null,
@@ -88,13 +110,21 @@ Examples:
 - "I want an office chair" -> { "type": "NEW_SEARCH", "updates": { "topic": "office chair" } }
 - "Under ₹18k" -> { "type": "UPDATE_SEARCH", "updates": { "maxPrice": 18000 } }
 - "I need 5" -> { "type": "UPDATE_SEARCH", "updates": { "quantity": 5 } }
-- "It should be ergonomic with adjustable height" -> { "type": "UPDATE_SEARCH", "updates": { "requirements": { "ergonomic": true, "adjustableHeight": true } } }
-- "I want the second one" -> { "type": "SELECT_PRODUCT", "updates": { "selectedProductIndex": 2 } }
-- "I'll take the cheapest" -> { "type": "SELECT_PRODUCT", "updates": { "selectedProductReference": "cheapest" } }
+- "I'll take the second one" -> { "type": "SELECT_PRODUCT", "updates": { "selectedProductIndex": 2 } }
+- "The second option looks good" -> { "type": "SELECT_PRODUCT", "updates": { "selectedProductIndex": 2 } }
 - "Tell me more about it" -> { "type": "PRODUCT_DETAILS" }
 - "Can you give me a better price?" -> { "type": "START_NEGOTIATION" }
 - "Can you do better?" -> { "type": "CONTINUE_NEGOTIATION" }
-- "I can pay 8500" -> { "type": "CONTINUE_NEGOTIATION", "updates": { "buyerOffer": 8500 } }
+- "Can you come down a bit?" -> { "type": "CONTINUE_NEGOTIATION" }
+- "Would you take 18k?" -> { "type": "BUYER_OFFER", "updates": { "buyerOffer": 18000 } }
+- "Can you give me 15% discount?" -> { "type": "BUYER_OFFER", "updates": { "discountPercent": 15 } }
+- "How about 10% off?" -> { "type": "BUYER_OFFER", "updates": { "discountPercent": 10 } }
+- "I can do ₹18,000 with free delivery" -> { "type": "BUYER_OFFER", "updates": { "buyerOffer": 18000, "requestedFreeDelivery": true } }
+- "Could you waive the delivery fee?" -> { "type": "REQUEST_FREE_DELIVERY", "updates": { "requestedFreeDelivery": true } }
+- "Can you cover shipping?" -> { "type": "REQUEST_FREE_DELIVERY", "updates": { "requestedFreeDelivery": true } }
+- "Does shipping come free?" -> { "type": "COMMERCE_QUERY", "updates": { "query": { "kind": "SHIPPING_AVAILABILITY" } } }
+- "Please order it" -> { "type": "PLACE_ORDER" }
+- "Go ahead" (when order prompt given) -> { "type": "PLACE_ORDER" }
 - "Start over" -> { "type": "NEW_SEARCH", "updates": { "topic": null, "maxPrice": null }, "clearFields": ["topic", "maxPrice", "selectedProductId"] }
 `.trim();
 
@@ -115,48 +145,88 @@ export const buildStateContext = (state: BuyerState): string => {
   ].join("\n");
 };
 
+const wordNumberMap: Record<string, number> = {
+  zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19,
+  twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90,
+  hundred: 100, thousand: 1000, grand: 1000, lakh: 100000, lakhs: 100000, crore: 10000000, crores: 10000000,
+};
+
+export const normalizeTopic = (topic: string): string => {
+  return topic
+    .toLowerCase()
+    .trim()
+    .replace(/^(?:an|a|the)\s+/i, "")
+    .replace(/\s+/g, " ");
+};
+
+const extractTopicText = (message: string): string => {
+  const clean = message.trim();
+  const searchMatch = clean.match(/^(?:show\s+me|find\s+me|look\s+for|search\s+for|i\s+want\s+to\s+buy|i\s+want|i\s+need|buy|purchase)\s+(?:an|a|the)?\s*([a-z0-9\s-]+?)(?=\s*(?:under|above|below|between|with|for|around|in|under|less than|more than|\d+|$))/i);
+  if (searchMatch && searchMatch[1]) {
+    return searchMatch[1].trim();
+  }
+  return clean;
+};
+
+export const wordsToNumber = (text: string): number | null => {
+  const tokens = text.toLowerCase().replace(/[^a-z0-9\s-]/g, " ").split(/[\s-]+/).filter(Boolean);
+  if (tokens.length === 0) return null;
+
+  let total = 0;
+  let current = 0;
+  let found = false;
+
+  for (const token of tokens) {
+    if (wordNumberMap[token] !== undefined) {
+      found = true;
+      const val = wordNumberMap[token];
+      if (val === 100) {
+        current = (current === 0 ? 1 : current) * 100;
+      } else if (val >= 1000) {
+        current = (current === 0 ? 1 : current) * val;
+        total += current;
+        current = 0;
+      } else {
+        current += val;
+      }
+    } else if (/^\d+(?:\.\d+)?$/.test(token)) {
+      found = true;
+      const val = Number.parseFloat(token);
+      current += val;
+    } else if (token === "k") {
+      found = true;
+      current = (current === 0 ? 1 : current) * 1000;
+      total += current;
+      current = 0;
+    }
+  }
+
+  if (!found) return null;
+  total += current;
+  return total > 0 ? total : null;
+};
+
 const numberFromWord = (word: string): number | null => {
-  const map: Record<string, number> = {
-    zero: 0,
-    one: 1,
-    two: 2,
-    three: 3,
-    four: 4,
-    five: 5,
-    six: 6,
-    seven: 7,
-    eight: 8,
-    nine: 9,
-    ten: 10,
-    eleven: 11,
-    twelve: 12,
-    thirteen: 13,
-    fourteen: 14,
-    fifteen: 15,
-    sixteen: 16,
-    seventeen: 17,
-    eighteen: 18,
-    nineteen: 19,
-    twenty: 20,
-  };
-  return map[word.toLowerCase()] ?? null;
+  return wordsToNumber(word);
 };
 
 export const parseIndianPrice = (value: string | number | null | undefined): number | null => {
   if (value === null || value === undefined) return null;
-  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "number") return Number.isFinite(value) && value > 0 ? value : null;
 
   let raw = String(value).trim();
   if (!raw) return null;
 
-  raw = raw.replace(/₹|rs/gi, "").replace(/,/g, "").trim();
+  raw = raw.replace(/₹|inr|rs\.?|rupees?/gi, "").replace(/,/g, "").trim();
   if (!raw) return null;
 
   const lower = raw.toLowerCase();
+
   const matchers: Array<[RegExp, number]> = [
     [/^(\d+(?:\.\d+)?)\s*(crore|crores)$/i, 10000000],
     [/^(\d+(?:\.\d+)?)\s*(lakh|lakhs|l)$/i, 100000],
-    [/^(\d+(?:\.\d+)?)\s*(k|thousand)$/i, 1000],
+    [/^(\d+(?:\.\d+)?)\s*(k|thousand|grand)$/i, 1000],
   ];
 
   for (const [regex, factor] of matchers) {
@@ -170,106 +240,51 @@ export const parseIndianPrice = (value: string | number | null | undefined): num
   const plain = Number.parseFloat(raw);
   if (Number.isFinite(plain) && /^\d+(?:\.\d+)?$/.test(raw.replace(/\s+/g, ""))) return plain;
 
+  const parsedWords = wordsToNumber(lower);
+  if (parsedWords !== null && parsedWords > 0) return parsedWords;
+
   return null;
 };
 
-export const normalizeTopic = (value: string): string => {
-  const text = (value ?? "")
-    .toLowerCase()
-    .replace(/[.,!?;:()\[\]{}"']/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+export const parseBuyerOffer = (message: string): number | null => {
+  const clean = message.trim();
+  if (!clean) return null;
 
-  if (!text) return "";
-  if (/^[\d\s]+$/.test(text)) return "";
-
-  const stripped = text
-    .replace(/^(?:show\s+me|find\s+me|look\s+for|search\s+for|i\s+want\s+to\s+buy|i\s+want|i\s+need|need|buy|purchase|find|give\s+me|i'd\s+prefer|i\s+prefer|i'd\s+like|i\s+would\s+like|preferably|ideally|must\s+have|must\s+be|is\s+there|can\s+you\s+find|can\s+you\s+show\s+me)\s+/i, "")
-    .replace(/^(?:which\s+one\s+is|which\s+is|what\s+is|what\s+are)\s+/i, "")
-    .replace(/^(?:a|an|the)\s+/i, "")
-    .replace(/(?:\b|\s+)(?:under|above|below|between|with|without|for|and|or|make it|cheapest|expensive|price|budget|in|on|at|size|color|colour|black|white|red|blue|grey|gray|green|silver|ram|storage|gb|tb|ssd|hdd|ergonomic|adjustable\s+height|adjustable|lumbar\s+support|comfortable|comfort|working\s+from\s+home|work\s+from\s+home|home\s+workspace|coding|lightweight|camera|long\s+hours|all\s+day|required|preferred|preferably|is\s+required|is\s+preferred)\b/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  if (!stripped) return "";
-  if (/^[\d\s]+$/.test(stripped)) return "";
-  if (/^(?:which\s+one\s+is|which\s+is|what\s+is|what\s+are)\b/i.test(stripped)) return "";
-  if (/^(?:something|anything|item|product)(?:\s+comfortable|\s+cheap|\s+good|\s+lightweight)?$/i.test(stripped)) return "";
-
-  const words = stripped.split(/\s+/).filter(Boolean).map((word) => {
-    const base = word.toLowerCase();
-    if (base.endsWith("ies") && base.length > 4) return base.slice(0, -3) + "y";
-    if (base.endsWith("sses") || base.endsWith("ss") || base.endsWith("us") || base.endsWith("is") || base.endsWith("as")) return base;
-    if (base.endsWith("s") && base.length > 3 && !/[0-9]/.test(base)) return base.slice(0, -1);
-    return base;
-  });
-
-  return words.join(" ");
-};
-
-const extractTopicText = (message: string): string => {
-  const stripped = message
-    .replace(/^(?:actually|instead)\s+/i, "")
-    .replace(/^(?:show\s+me|find\s+me|look\s+for|search\s+for|i\s+want\s+to\s+buy|i\s+want|i\s+need|buy|purchase|looking\s+for|find|give\s+me|i'd\s+prefer|i\s+prefer|i'd\s+like|i\s+would\s+like|preferably|ideally|must\s+have|must\s+be)\s+/i, "")
-    .replace(/^(?:which\s+one\s+is|which\s+is|what\s+is|what\s+are)\s+/i, "")
-    .replace(/^(?:a|an|the)\s+/i, "")
-    .replace(/(?:\b|\s+)(?:under|above|below|between|less than|more than|at most|at least|minimum|maximum|cheapest|most expensive|lowest price|highest price|budget|price|with|without|for|size\s*\d+|ram|storage|gb|tb|ssd|hdd|is\s+required|is\s+preferred)\b.*$/i, "")
-    .replace(/[.?!]+$/g, "")
-    .trim();
-
-  if (!stripped) return "";
-  if (/^[\d\s]+$/.test(stripped)) return "";
-  if (!/[a-z]/i.test(stripped)) return "";
-  if (/^(?:which\s+one\s+is|which\s+is|what\s+is|what\s+are)\b/i.test(stripped)) return "";
-  if (/^(?:something|anything|item|product)(?:\s+comfortable|\s+cheap|\s+good|\s+lightweight)?$/i.test(stripped)) return "";
-  return stripped;
-};
-
-const parsePriceConstraint = (message: string): { minPrice: number | null; maxPrice: number | null } => {
-  const lower = message.toLowerCase().replace(/\s+/g, " ").trim();
-  const result = { minPrice: null as number | null, maxPrice: null as number | null };
-
-  const between = lower.match(/between\s*(?:₹|rs)?\s*(\d[\d,]*(?:\.\d+)?)\s*(k|thousand|l|lakh|lakhs|crore|crores)?\s*(?:and|to)\s*(?:₹|rs)?\s*(\d[\d,]*(?:\.\d+)?)\s*(k|thousand|l|lakh|lakhs|crore|crores)?/i);
-  if (between) {
-    const a = parseIndianPrice(`${between[1]} ${between[2] ?? ""}`.trim());
-    const b = parseIndianPrice(`${between[3]} ${between[4] ?? ""}`.trim());
-    if (a !== null) result.minPrice = a;
-    if (b !== null) result.maxPrice = b;
-    return result;
+  // 1. Rupee symbol / Rs / INR prefix + price (e.g. "₹18,000", "Rs 18000", "₹18k", "INR 18,000")
+  const symbolMatch = clean.match(/(?:₹|inr|rs\.?\s*)\s*([\d,.]+(?:\s*(?:k|thousand|grand|lakh|lakhs))?|[a-z\s]+)/i);
+  if (symbolMatch) {
+    const parsed = parseIndianPrice(symbolMatch[1].trim());
+    if (parsed !== null && parsed > 0) return parsed;
   }
 
-  const max = lower.match(/(?:under|below|less than|at most|maximum|max|up to|make it)\s*(?:₹|rs)?\s*(\d[\d,]*(?:\.\d+)?)\s*(k|thousand|l|lakh|lakhs|crore|crores)?/i);
-  if (max) {
-    const parsed = parseIndianPrice(`${max[1]} ${max[2] ?? ""}`.trim());
-    if (parsed !== null) result.maxPrice = parsed;
+  // 2. Keyword + price (e.g. "would you take 18k", "take 18,000", "i can do 18,000", "around 18k", "how about eighteen thousand", "meet around 18,000")
+  const keywordMatch = clean.match(
+    /(?:take|pay|offer|make it|do|how about|give me|at|for|around|meet around|hoping for|looking for|i'm around|i am around|thinking around|ok with|i'm ok with|im ok with|fine with|happy with|agree to|agree with|thinking of|thinking|price of|price|budget of|budget)\s*(?:₹|inr|rs\.?)?\s*([\d,.]+(?:\s*(?:k|thousand|grand|lakh|lakhs))?|[a-z\s]+)(?=\s|$|[.,?!]|\s+if|\s+with)/i
+  );
+  if (keywordMatch) {
+    const parsed = parseIndianPrice(keywordMatch[1].trim());
+    if (parsed !== null && parsed > 0) return parsed;
   }
 
-  const min = lower.match(/(?:above|over|more than|at least|minimum|min)\s*(?:₹|rs)?\s*(\d[\d,]*(?:\.\d+)?)\s*(k|thousand|l|lakh|lakhs|crore|crores)?/i);
-  if (min) {
-    const parsed = parseIndianPrice(`${min[1]} ${min[2] ?? ""}`.trim());
-    if (parsed !== null) result.minPrice = parsed;
+  const kMatch = clean.match(/\b(\d+(?:\.\d+)?\s*(?:k|thousand|grand))\b/i);
+  if (kMatch) {
+    const parsed = parseIndianPrice(kMatch[1]);
+    if (parsed !== null && parsed > 0) return parsed;
   }
 
-  return result;
-};
+  const wordNumberMatch = clean.match(/\b((?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)\s+(?:thousand|grand|k))\b/i);
+  if (wordNumberMatch) {
+    const parsed = parseIndianPrice(wordNumberMatch[1]);
+    if (parsed !== null && parsed > 0) return parsed;
+  }
 
-const parseQuantity = (message: string): number | null => {
-  const patterns = [
-    /(\d+)\s*(?:units?|pieces?|pcs|items?|chairs?|laptops?|desks?|tables?|monitors?|phones?|mugs?|fans?|of them)\b/i,
-    /(?:need|buy|want|quantity|qty|looking for|for)\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\b/i,
-    /^(?:i\s+need|i\s+want|buy|purchase)\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\b/i,
-    /\b(\d+)\s*(?:units?|pieces?|pcs|items?|chairs?|laptops?)\b/i,
-    /\b(?:for|need|want)\s+(\d+)\b/i,
-  ];
-
-  for (const regex of patterns) {
-    const match = message.match(regex);
-    if (!match) continue;
-    const token = match[1] ?? "";
-    const asNumber = Number.parseInt(token, 10);
-    if (Number.isFinite(asNumber) && asNumber > 0) return asNumber;
-    const wordNumber = numberFromWord(token);
-    if (wordNumber !== null && wordNumber > 0) return wordNumber;
+  const standaloneMatch = clean.match(/\b(\d{1,3}(?:,\d{3})+|\d{4,7})\b/);
+  if (standaloneMatch) {
+    const isQty = new RegExp(`\\b${standaloneMatch[1].replace(/,/g, "")}\\s*(?:units?|pieces?|pcs|items?|chairs?|days?|hours?|mins?)\\b`, "i").test(clean);
+    if (!isQty) {
+      const parsed = parseIndianPrice(standaloneMatch[1]);
+      if (parsed !== null && parsed > 0) return parsed;
+    }
   }
 
   return null;
@@ -302,61 +317,74 @@ const parseDiscountPercent = (message: string): number | null => {
   return null;
 };
 
-export const parseBuyerOffer = (message: string): number | null => {
-  const clean = message.trim();
+const parseQuantity = (message: string): number | null => {
+  const patterns = [
+    /(\d+)\s*(?:units?|pieces?|pcs|items?|chairs?|laptops?|desks?|tables?|monitors?|phones?|mugs?|fans?|of them)\b/i,
+    /(?:need|buy|want|quantity|qty|looking for|for)\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\b/i,
+    /^(?:i\s+need|i\s+want|buy|purchase)\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\b/i,
+    /\b(\d+)\s*(?:units?|pieces?|pcs|items?|chairs?|laptops?)\b/i,
+    /\b(?:for|need|want)\s+(\d+)\b/i,
+  ];
 
-  // 1. Explicit keyword + price: e.g. "ok with 18000", "pay 18000", "offer 18000", "at 18000", "for 18000"
-  const keywordMatch = clean.match(
-    /(?:pay|offer|make it|do|how about|give me|at|for|around|hoping for|looking for|i'm around|i am around|thinking around|ok with|i'm ok with|im ok with|fine with|happy with|agree to|agree with|thinking of|thinking|price of|price|budget of|budget)\s*(?:₹|rs\.?)?\s*([\d,.]+(?:\s*(?:k|thousand))?)/i
-  );
-  if (keywordMatch) {
-    const parsed = parseIndianPrice(keywordMatch[1]);
-    if (parsed !== null && parsed > 0) return parsed;
-  }
-
-  // 2. Rupee symbol / Rs prefix + number: e.g. "₹18,000", "Rs 18000", "₹18k"
-  const symbolMatch = clean.match(/(?:₹|rs\.?\s*)\s*([\d,.]+(?:\s*(?:k|thousand))?)/i);
-  if (symbolMatch) {
-    const parsed = parseIndianPrice(symbolMatch[1]);
-    if (parsed !== null && parsed > 0) return parsed;
-  }
-
-  // 3. Standalone price with k/thousand: e.g. "18k with free delivery", "18 thousand"
-  const kMatch = clean.match(/\b(\d+(?:\.\d+)?\s*(?:k|thousand))\b/i);
-  if (kMatch) {
-    const parsed = parseIndianPrice(kMatch[1]);
-    if (parsed !== null && parsed > 0) return parsed;
-  }
-
-  // 4. Standalone 4+ digit number: e.g. "18000 + free delivery", "18000 can you do delivery"
-  const standaloneMatch = clean.match(/\b(\d{4,7})\b/);
-  if (standaloneMatch) {
-    const isQty = new RegExp(`\\b${standaloneMatch[1]}\\s*(?:units?|pieces?|pcs|items?|chairs?|days?|hours?|mins?)\\b`, "i").test(clean);
-    if (!isQty) {
-      const parsed = Number.parseInt(standaloneMatch[1], 10);
-      if (Number.isFinite(parsed) && parsed > 0) return parsed;
-    }
+  for (const regex of patterns) {
+    const match = message.match(regex);
+    if (!match) continue;
+    const token = match[1] ?? "";
+    const asNumber = Number.parseInt(token, 10);
+    if (Number.isFinite(asNumber) && asNumber > 0) return asNumber;
+    const wordNumber = numberFromWord(token);
+    if (wordNumber !== null && wordNumber > 0) return wordNumber;
   }
 
   return null;
 };
 
+const parsePriceConstraint = (message: string): { minPrice: number | null; maxPrice: number | null } => {
+  const lower = message.toLowerCase().replace(/\s+/g, " ").trim();
+  const result = { minPrice: null as number | null, maxPrice: null as number | null };
+
+  const between = lower.match(/between\s*(?:₹|rs)?\s*(\d[\d,]*(?:\.\d+)?)\s*(k|thousand|l|lakh|lakhs|crore|crores)?\s*(?:and|to)\s*(?:₹|rs)?\s*(\d[\d,]*(?:\.\d+)?)\s*(k|thousand|l|lakh|lakhs|crore|crores)?/i);
+  if (between) {
+    const a = parseIndianPrice(`${between[1]} ${between[2] ?? ""}`.trim());
+    const b = parseIndianPrice(`${between[3]} ${between[4] ?? ""}`.trim());
+    if (a !== null) result.minPrice = a;
+    if (b !== null) result.maxPrice = b;
+    return result;
+  }
+
+  const max = lower.match(/(?:under|below|less than|at most|maximum|max|up to|make it)\s*(?:₹|rs)?\s*(\d[\d,]*(?:\.\d+)?)\s*(k|thousand|l|lakh|lakhs|crore|crores)?/i);
+  if (max) {
+    const parsed = parseIndianPrice(`${max[1]} ${max[2] ?? ""}`.trim());
+    if (parsed !== null) result.maxPrice = parsed;
+  }
+
+  const min = lower.match(/(?:above|over|more than|at least|minimum|min)\s*(?:₹|rs)?\s*(\d[\d,]*(?:\.\d+)?)\s*(k|thousand|l|lakh|lakhs|crore|crores)?/i);
+  if (min) {
+    const parsed = parseIndianPrice(`${min[1]} ${min[2] ?? ""}`.trim());
+    if (parsed !== null) result.minPrice = parsed;
+  }
+
+  return result;
+};
+
 const parseRequestedFreeDelivery = (message: string): boolean => {
-  return /\b(?:free delivery|free shipping|delivery included|include delivery|waive delivery|waive shipping|cover delivery|cover shipping|no shipping fee|make shipping free|make delivery free|shipping included|include shipping|throw in free delivery|delivery be included)\b/i.test(message);
+  return /\b(?:free delivery|free shipping|delivery included|include delivery|include shipping|waive delivery|waive shipping|waive the delivery fee|waive the shipping fee|waive shipping fee|waive delivery fee|cover delivery|cover shipping|no shipping fee|no delivery fee|make shipping free|make delivery free|shipping included|throw in free delivery|throw in delivery|throw in shipping|absorb the shipping|absorb shipping|absorb delivery|absorb the shipping cost|absorb shipping cost|shipping at no extra cost|no extra cost for delivery|no extra cost for shipping|at no extra cost|shipping free|delivery free)\b/i.test(message);
 };
 
 export const isFreeDeliveryRequest = (message: string): boolean => {
   const clean = message.trim().toLowerCase();
-  // Question starters for read queries (e.g. "Does this include free delivery?", "Is shipping included?")
   if (/^(?:does|is|do i|how much is|what is|what's)\b/i.test(clean)) {
+    if (!/(?:can you|could you|would you|will you|please|can i|i'd like|i want)/i.test(clean)) {
+      return false;
+    }
+  }
+
+  if (/(?:does.*include|is.*included|is.*free\?|do i have to pay)/i.test(clean) && !/(?:can you|could you|can i|would you|if you|please|i'd like|i want)/i.test(clean)) {
     return false;
   }
-  // Questions checking existing terms explicitly: "does the offer include...", "is delivery included..."
-  if (/(?:does.*include|is.*included|is.*free\?)/i.test(clean) && !/(?:can you|could you|can i|would you|if you)/i.test(clean)) {
-    return false;
-  }
-  return /\b(?:can you|can i|could you|would you|will you|please|if you)?\s*(?:provide|include|make|waive|cover|throw in|get|add)\s*(?:free\s*)?(?:delivery|shipping)\b/i.test(clean) ||
-    /\b(?:make delivery free|make shipping free|free delivery|free shipping|delivery included|waive shipping|waive delivery)\b/i.test(clean);
+
+  return parseRequestedFreeDelivery(clean) ||
+    /\b(?:can you|can i|could you|would you|will you|please|if you)?\s*(?:provide|include|make|waive|cover|throw in|absorb|get|add)\s*(?:free\s*)?(?:delivery|shipping)\b/i.test(clean);
 };
 
 export const isExplicitAcceptance = (message: string): boolean => {
@@ -456,13 +484,9 @@ export const sanitizeIntent = (parsed: any): BuyerIntent | null => {
     }
   }
 
-  // Authoritative catalog validation pass
-  if (updates.hardRequirements || updates.softPreferences) {
-    const validated = validateCatalogRequirements(updates.hardRequirements || {}, updates.softPreferences || {});
-    updates.hardRequirements = validated.hardRequirements;
-    updates.softPreferences = validated.softPreferences;
-    updates.requirements = validated.hardRequirements;
-  }
+  // Hard requirements and soft preferences pass through to the search engine.
+  // Dynamic catalog capability detection in searchProducts() handles matching
+  // against actual product specifications — no static allowlist needed here.
 
   const result: BuyerIntent = { type: parsed.type, updates };
   if (Array.isArray(parsed.clearFields)) {
@@ -556,11 +580,32 @@ export const localFallbackIntent = (
     };
   }
 
-  // pendingAction PLACE_ORDER: "yes" / "ok" / "sure" alone triggers place order when pending
+  // pendingAction checks
   const isAmbiguousYes = /^(?:yes|yeah|yep|ok|okay|sure|go ahead|proceed|confirm|absolutely|definitely|alright|fine|sounds good|let's do it|do it)\.?$/i.test(
     cleanMsg
   );
   if (hasAcceptedNegotiation && isAmbiguousYes && currentState.pendingAction === "PLACE_ORDER") {
+    return {
+      type: "PLACE_ORDER",
+      updates: {},
+      clearFields: [],
+    };
+  }
+
+  if (currentState.pendingAction === "CONTINUE_NEGOTIATION" && isAmbiguousYes) {
+    return {
+      type: "CONTINUE_NEGOTIATION",
+      updates: {},
+      clearFields: [],
+    };
+  }
+
+  // Explicit Order Placement check
+  const isOrderPlacementPhrase =
+    /^(?:please\s+)?(?:order\s+it|place\s+(?:the\s+)?order|buy\s+it|i'll\s+take\s+it|complete\s+the\s+order|let's\s+buy|let's\s+proceed|proceed\s+with\s+(?:purchase|order)|i\s+want\s+to\s+place\s+(?:the\s+)?order|order\s+it)\b/i.test(cleanMsg) ||
+    /^(?:go ahead|let's buy it|i'll take it|complete the order|let's proceed|place the order for me|please order it)[.!]*$/i.test(cleanMsg);
+
+  if (isOrderPlacementPhrase && (hasAcceptedNegotiation || currentState.selectedProductId || currentState.searchResults.length > 0)) {
     return {
       type: "PLACE_ORDER",
       updates: {},
@@ -654,8 +699,9 @@ export const localFallbackIntent = (
     const parsedQty = parseQuantity(cleanMsg);
     if (parsedQty !== null) updates.quantity = parsedQty;
 
+    const targetType: IntentType = extractedBuyerOffer !== null ? "BUYER_OFFER" : "REQUEST_FREE_DELIVERY";
     return {
-      type: "REQUEST_FREE_DELIVERY",
+      type: targetType,
       updates,
       clearFields: [],
     };
@@ -678,8 +724,9 @@ export const localFallbackIntent = (
     /^(?:how much|what is|what's|how many|when|is shipping|is delivery|can i negotiate|is this negotiable|is my order|can i pay|why can't|why was|why do|why isn't|what discount|does this include|do you have|do you allow|what's your|what is your)\b/i.test(cleanMsg);
 
   const isNegotiationRequest =
-    /^(?:can you give|can you do|can you offer|how about|i'll give|i'll pay|i can pay|reduce price|give me a better price|can we negotiate|can you negotiate|let's negotiate|can i negotiate)\b/i.test(cleanMsg) ||
-    /(?:negotiate|better price|lower price|discount)/i.test(cleanMsg);
+    parseBuyerOffer(cleanMsg) !== null ||
+    /^(?:can you give|can you do|can you offer|can you come|can you improve|can we keep|can we negotiate|can you negotiate|how about|would you take|would you do|i'll give|i'll pay|i can pay|reduce price|give me a better price|let's negotiate|can i negotiate|is that the best)\b/i.test(cleanMsg) ||
+    /(?:negotiate|better price|lower price|discount|come down|do better|best price|improve|keep negotiating|offer something better)/i.test(cleanMsg);
 
   if (isQuestion && !isNegotiationRequest && !isExplicitAcceptance(cleanMsg)) {
     let queryKind: CommerceQueryKind = "PRODUCT_PRICE";
@@ -691,7 +738,9 @@ export const localFallbackIntent = (
       if (idx !== null) targetRef = idx;
     }
 
-    if (/(?:price|cost|how much|listed price|cost of|what does this cost|price of)/i.test(cleanMsg)) {
+    if (/(?:free\s*(?:delivery|shipping)|(?:delivery|shipping)\s*(?:come\s*)?free|include\s*(?:delivery|shipping)|(?:delivery|shipping)\s*included|pay\s+for\s+shipping)/i.test(cleanMsg)) {
+      queryKind = "SHIPPING_AVAILABILITY";
+    } else if (/(?:price|cost|how much|listed price|cost of|what does this cost|price of)/i.test(cleanMsg)) {
       if (/(?:current offer|your offer|merchant offer)/i.test(cleanMsg)) {
         queryKind = "CURRENT_OFFER";
       } else if (/(?:total|total for|order total)/i.test(cleanMsg)) {
@@ -705,8 +754,6 @@ export const localFallbackIntent = (
       } else {
         queryKind = "PRODUCT_INVENTORY";
       }
-    } else if (/(?:free delivery|free shipping|shipping free|delivery free|include delivery|shipping included)/i.test(cleanMsg)) {
-      queryKind = "SHIPPING_AVAILABILITY";
     } else if (/(?:delivery|arrive|shipping time|shipping take|expected delivery)/i.test(cleanMsg)) {
       queryKind = "PRODUCT_DELIVERY";
     } else if (/(?:negotiable|can i negotiate)/i.test(cleanMsg)) {
@@ -744,18 +791,21 @@ export const localFallbackIntent = (
 
   // ── Negotiation phrase & offer detection ──
   const isNegotiationPhrase =
-    /(better price|discount|cheaper price|cheaper deal|lower price|better deal|negotiate|best price|reduce the price|reduce price|discounted|come down|do better|too high|how about|i can pay|i'll pay|i will pay|can you do|what price|hoping for|looking for|around|is this work|is this okay|would this work|free delivery|free shipping)/i.test(cleanMsg) ||
-    /^(?:can you|is there|any|what is|i'd like to)\s+(?:a\s+)?(?:better\s+price|discount|cheaper|negotiate|lower|deal|best\s+price)/i.test(cleanMsg);
+    /(better price|discount|cheaper price|cheaper deal|lower price|better deal|negotiate|best price|reduce the price|reduce price|discounted|come down|do better|too high|how about|i can pay|i'll pay|i will pay|can you do|what price|hoping for|looking for|around|is this work|is this okay|would this work|free delivery|free shipping|negotiate a little more|come down a bit|improve that offer|best you can do|keep negotiating|offer something better)/i.test(cleanMsg) ||
+    /^(?:can you|could you|would you|can we|is there|any|what is|i'd like to)\s+(?:a\s+)?(?:better\s+price|discount|cheaper|negotiate|lower|deal|best\s+price|offer\s+something\s+better|come\s+down|improve|keep\s+negotiating)/i.test(cleanMsg);
 
   const extractedBuyerOffer = parseBuyerOffer(cleanMsg);
+  const extractedDiscountPercent = parseDiscountPercent(cleanMsg);
 
   const parsedQty = parseQuantity(cleanMsg);
   const isFreeDel = parseRequestedFreeDelivery(cleanMsg);
 
-  if (isNegotiationPhrase || (hasActiveNegotiation && (extractedBuyerOffer !== null || isFreeDel || /better|lower|high|down/i.test(cleanMsg)))) {
-    const intentType: IntentType = extractedBuyerOffer !== null ? "BUYER_OFFER" : (hasActiveNegotiation ? "CONTINUE_NEGOTIATION" : "START_NEGOTIATION");
+  if (isNegotiationPhrase || (hasActiveNegotiation && (extractedBuyerOffer !== null || extractedDiscountPercent !== null || isFreeDel || /better|lower|high|down/i.test(cleanMsg)))) {
+    const isOffer = extractedBuyerOffer !== null || extractedDiscountPercent !== null;
+    const intentType: IntentType = isOffer ? "BUYER_OFFER" : (hasActiveNegotiation ? "CONTINUE_NEGOTIATION" : "START_NEGOTIATION");
     const updates: BuyerIntent["updates"] = {};
     if (extractedBuyerOffer !== null) updates.buyerOffer = extractedBuyerOffer;
+    if (extractedDiscountPercent !== null) updates.discountPercent = extractedDiscountPercent;
     if (parsedQty !== null) updates.quantity = parsedQty;
     if (isFreeDel) updates.requestedFreeDelivery = true;
     return {
@@ -802,10 +852,10 @@ export const localFallbackIntent = (
 
   const isSelectionPhrase =
     !isQuestionAboutSorting && (
-      /(?:i\s+want|i'll\s+take|select|choose|prefer|go\s+with|give\s+me)?\s*(?:the\s+)?(first|1st|second|2nd|third|3rd|fourth|4th|fifth|5th|\d+th|last|cheapest|most\s+expensive|option\s*\d+|number\s*\d+|#\d+)(?:\s+one|\s+option)?\b/i.test(
+      /(?:i\s+want|i'll\s+take|select|choose|prefer|go\s+with|give\s+me)?\s*(?:the\s+)?(first|1st|second|2nd|third|3rd|fourth|4th|fifth|5th|\d+th|last|cheapest|most\s+expensive|option\s*(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)|number\s*(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)|#\d+)(?:\s+one|\s+option)?\b/i.test(
         cleanMsg
       ) ||
-      /^(?:option|number|#)\s*\d+$/i.test(cleanMsg) ||
+      /^(?:option|number|#)\s*(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)$/i.test(cleanMsg) ||
       /^(first|second|third|fourth|fifth|\d+th|last|cheapest|most expensive)$/i.test(cleanMsg) ||
       /^(?:i\s+want\s+)?(?:the\s+one\s+at|at)\s*(?:₹|rs)?\s*[\d,]+/i.test(cleanMsg) ||
       (hasExistingSearchResults && /^(?:i\s+want\s+)?(?:that|this)\s+one$/i.test(cleanMsg))
@@ -1009,14 +1059,15 @@ export const localFallbackIntent = (
     clearFields.push("softPreferences");
   }
 
-  // Authoritative catalog validation pass
-  const validated = validateCatalogRequirements(rawHard, rawSoft);
-  if (Object.keys(validated.hardRequirements).length > 0) {
-    updates.hardRequirements = validated.hardRequirements;
-    updates.requirements = validated.hardRequirements;
+  // Hard requirements and soft preferences pass through directly.
+  // Dynamic catalog capability detection in searchProducts() handles matching
+  // against actual product specifications — no static allowlist needed here.
+  if (Object.keys(rawHard).length > 0) {
+    updates.hardRequirements = rawHard;
+    updates.requirements = rawHard;
   }
-  if (Object.keys(validated.softPreferences).length > 0) {
-    updates.softPreferences = validated.softPreferences;
+  if (Object.keys(rawSoft).length > 0) {
+    updates.softPreferences = rawSoft;
   }
 
   const topicCandidate = extractTopicText(cleanMsg);
